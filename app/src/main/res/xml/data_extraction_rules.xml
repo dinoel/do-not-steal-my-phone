@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backups are disabled entirely (allowBackup=false); these excludes are belt
+     and braces for OEM transfer tools. guard_prefs holds the event log (a
+     timestamped record of when the phone is locked/moved/charged) and the armed
+     state — never back it up or transfer it. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="guard_prefs.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="guard_prefs.xml" />
+    </device-transfer>
+</data-extraction-rules>

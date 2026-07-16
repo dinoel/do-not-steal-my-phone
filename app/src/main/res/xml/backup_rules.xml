@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backups are disabled entirely (allowBackup=false); this exclude is belt and
+     braces. guard_prefs holds the event log (a timestamped record of when the
+     phone is locked/moved/charged) and the armed state — never back it up. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="guard_prefs.xml" />
+</full-backup-content>

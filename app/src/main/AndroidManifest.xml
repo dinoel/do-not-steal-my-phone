@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Foreground service + the "special use" subtype. There is no built-in
+         FGS type for a device-monitoring / anti-theft alarm, so specialUse is
+         the correct catch-all on Android 14. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- FGS notification (Android 13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- PARTIAL_WAKE_LOCK during TRIGGERED/ALARM so the CPU keeps running the
+         accelerometer read loop and the siren while the screen is off. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Short warning buzz when motion is first detected (TRIGGERED). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Lets the app open the system dialog asking to be exempted from Doze /
+         battery optimization (reduces standby throttling of the service). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Optional "survive a reboot while armed" feature (default off). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Launch the full-screen white/black flash over the lock screen when the
+         alarm fires (the standard alarm/call mechanism). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- Camera flash is used as a strobe but is optional (setTorchMode needs no
+         CAMERA permission); don't require it so flash-less devices still install. -->
+    <uses-feature
+        android:name="android.hardware.camera.flash"
+        android:required="false" />
+
+    <!-- allowBackup=false: the prefs hold the event log (a timestamped record of
+         when the phone is locked/moved/charged) and the armed state — neither
+         belongs in a cloud backup or a device transfer. The rule files below
+         additionally exclude the prefs explicitly, as belt and braces for OEM
+         transfer tools that ignore allowBackup. -->
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Guard"
+        tools:targetApi="34">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Guard">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Full-screen white/black strobe shown over the keyguard during ALARM.
+             showWhenLocked + turnScreenOn let it appear and wake the screen; it has
+             no disarm control, so silencing still requires a real unlock. -->
+        <activity
+            android:name=".FlashActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.Guard" />
+
+        <!-- The single foreground service that owns the whole state machine. -->
+        <service
+            android:name=".GuardService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <!-- Required justification for the specialUse type. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Personal anti-theft alarm: monitors motion while the phone is left unattended and sounds a siren if it is moved and not unlocked." />
+        </service>
+
+        <!-- Quick Settings tile (primary arm/disarm control). -->
+        <service
+            android:name=".GuardTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_shield"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Boot survival + AlarmManager watchdog backstop. Both are manifest
+             receivers so they can restart the process after it was killed. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+    </application>
+
+</manifest>

@@ -1,0 +1,6 @@
+<resources>
+    <!-- Bare window theme; all real colors come from the Compose theme.
+         Uses a platform Material parent so no extra Material dependency is
+         needed just for the pre-Compose window background. -->
+    <style name="Theme.Guard" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

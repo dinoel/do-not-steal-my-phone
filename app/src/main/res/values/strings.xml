@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Guard</string>
+    <string name="tile_label">Guard</string>
+
+    <!-- Notification channels -->
+    <string name="channel_status_name">Guard status</string>
+    <string name="channel_status_desc">Ongoing notification showing whether the guard is armed.</string>
+    <string name="channel_alarm_name">Guard alarm</string>
+    <string name="channel_alarm_desc">Shown while the anti-theft siren is sounding.</string>
+
+    <!-- Notification / state text -->
+    <string name="state_unarmed">Guard off</string>
+    <string name="state_armed">Guard armed — watching for motion</string>
+    <string name="state_armed_waiting">Guard armed — lock the phone to start</string>
+    <string name="state_armed_charging">Guard armed — paused while charging (unplug to activate)</string>
+    <string name="state_triggered">Motion detected — unlock now!</string>
+    <string name="state_alarm">ALARM — phone moved!</string>
+    <string name="action_arm">Arm</string>
+    <string name="action_disarm">Disarm</string>
+</resources>

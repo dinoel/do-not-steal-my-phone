@@ -1,0 +1,16 @@
+*.iml
+.gradle/
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+/app/build/
+.kotlin/
+# Local Claude Code settings
+/.claude/
+# Release signing — never commit these
+*.keystore
+keystore.properties

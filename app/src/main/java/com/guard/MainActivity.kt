@@ -18,6 +18,10 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
@@ -37,6 +41,8 @@ import android.widget.TextView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
  * Single settings + status screen, built with plain framework Views styled from
@@ -80,6 +86,28 @@ class MainActivity : Activity() {
     private lateinit var notifStatus: TextView
     private lateinit var notifButton: Button
     private lateinit var logContainer: LinearLayout
+    private lateinit var testSirenButton: Button
+
+    // Live motion meter (calibration preview shown under Sensitivity).
+    private lateinit var meterTrack: android.widget.FrameLayout
+    private lateinit var meterFill: View
+    private lateinit var meterMarker: View
+    private lateinit var meterFillDrawable: GradientDrawable
+    private var meterOver = false
+    private var meterSmoothed = 0f
+    private var sensorManager: SensorManager? = null
+    private var accelSensor: Sensor? = null
+
+    private val accelListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            val x = e.values[0]; val y = e.values[1]; val z = e.values[2]
+            val jolt = abs(sqrt(x * x + y * y + z * z) - SensorManager.GRAVITY_EARTH)
+            meterSmoothed = meterSmoothed * 0.6f + jolt * 0.4f
+            updateMeter(meterSmoothed)
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
 
     private var pulseAnimator: ValueAnimator? = null
     private var alarmAnimator: ObjectAnimator? = null
@@ -118,11 +146,22 @@ class MainActivity : Activity() {
         } else {
             registerReceiver(powerReceiver, filter)
         }
+        // Live motion meter: sample the accelerometer only while the screen is
+        // open (the detection sensor runs in the service only while armed+locked).
+        if (sensorManager == null) {
+            sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            accelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        }
+        meterSmoothed = 0f
+        accelSensor?.let {
+            sensorManager?.registerListener(accelListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
         render()
     }
 
     override fun onPause() {
         runCatching { unregisterReceiver(powerReceiver) }
+        sensorManager?.unregisterListener(accelListener)
         stopPulse()
         stopAlarmPulse()
         super.onPause()
@@ -199,8 +238,11 @@ class MainActivity : Activity() {
             sensitivitySeek = slider(100) { p ->
                 prefs.sensitivity = p
                 sensitivityValue.text = sensitivityText(p)
+                updateMeter(meterSmoothed) // reposition trigger marker / recolor
             }
             card.addView(sensitivitySeek, wide().apply { topMargin = dp(6) })
+            card.addView(buildMeter(), wide().apply { topMargin = dp(12); height = dp(12) })
+            card.addView(caption("Live motion — move the phone; the bar turns red past the trigger line."))
         }, gap(12))
 
         // Grace period
@@ -360,7 +402,7 @@ class MainActivity : Activity() {
     }
 
     private fun testButton(): View {
-        val b = Button(this).apply {
+        testSirenButton = Button(this).apply {
             text = "Test siren"
             textSize = 15f; setTypeface(typeface, Typeface.BOLD); isAllCaps = false
             setTextColor(pal.danger)
@@ -368,8 +410,8 @@ class MainActivity : Activity() {
             background = roundRect(pal.elevated, 14f, pal.border, 1.5f)
             setOnClickListener { GuardService.send(context, GuardService.ACTION_TEST_SIREN) }
         }
-        b.layoutParams = wide().apply { height = dp(52) }
-        return b
+        testSirenButton.layoutParams = wide().apply { height = dp(52) }
+        return testSirenButton
     }
 
     private fun buildLogCard(): View {
@@ -592,8 +634,50 @@ class MainActivity : Activity() {
         setExemption(batteryStatus, batteryButton, pm.isIgnoringBatteryOptimizations(packageName))
         setExemption(notifStatus, notifButton, areNotificationsAllowed())
 
+        testSirenButton.text = if (prefs.testSirenActive) "Stop test siren" else "Test siren"
+
         renderLog()
         updating = false
+    }
+
+    /** Rounded track with a scaleX-driven fill and a vertical trigger marker. */
+    private fun buildMeter(): View {
+        meterTrack = android.widget.FrameLayout(this).apply {
+            background = roundRect(pal.track, 999f)
+        }
+        meterFillDrawable = roundRect(pal.stWatching, 999f)
+        meterFill = View(this).apply {
+            background = meterFillDrawable
+            pivotX = 0f
+            scaleX = 0f
+        }
+        meterTrack.addView(
+            meterFill,
+            android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT),
+        )
+        meterMarker = View(this).apply { background = roundRect(pal.text, 999f) }
+        meterTrack.addView(
+            meterMarker,
+            android.widget.FrameLayout.LayoutParams(dp(2), MATCH_PARENT),
+        )
+        return meterTrack
+    }
+
+    /** Update the live meter from a smoothed jolt (m/s^2 above gravity). */
+    private fun updateMeter(jolt: Float) {
+        if (!::meterFill.isInitialized) return
+        meterFill.scaleX = (jolt / METER_MAX).coerceIn(0f, 1f)
+        val threshold = GuardPrefs.sensitivityToJoltMs2(prefs.sensitivity)
+        val over = jolt >= threshold
+        if (over != meterOver) {
+            meterOver = over
+            meterFillDrawable.setColor(if (over) pal.danger else pal.stWatching)
+        }
+        val w = meterTrack.width
+        if (w > 0) {
+            val frac = (threshold / METER_MAX).coerceIn(0f, 1f)
+            meterMarker.translationX = frac * w - meterMarker.width / 2f
+        }
     }
 
     private fun sensitivityText(v: Int): String {
@@ -811,5 +895,9 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_NOTIF = 1
+        // Full-scale of the live motion meter, in m/s^2 above gravity. Chosen so a
+        // firm grab fills most of the bar while the trigger markers (jolt ~0.6-3.5)
+        // sit in the lower-middle where they are easy to read.
+        private const val METER_MAX = 8f
     }
 }

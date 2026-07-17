@@ -2,100 +2,121 @@
 
 A personal anti-theft "guard" for a phone left unattended in public. Arm it, put
 the phone down (screen off, locked by the normal keyguard). If the phone is moved
-and **not unlocked by the owner within a short grace period**, it plays a loud
-looping siren on the alarm stream. Built to the spec in `requirements.md`.
+and **not unlocked by the owner within a short grace period**, it blares a loud
+looping siren, vibrates, strobes the flashlight, and flashes the screen — until
+someone who can actually unlock the phone silences it.
 
-Kotlin + Jetpack (Compose), plain APK — no root, no device owner, no MDM.
+Kotlin, plain framework Views, ordinary APK — **no root, no device owner, no MDM,
+no network/cloud, and zero third-party dependencies** (only the Android framework
+and the Kotlin stdlib). The release APK is **~86 KB**.
 
 ## Build
 
-The Android SDK, Gradle wrapper, and a generated siren are already set up in this
-repo. From the project root:
-
 ```bash
-export ANDROID_HOME=$HOME/android-sdk   # SDK was installed here
+export ANDROID_HOME=$HOME/android-sdk   # SDK location
 ./gradlew :app:assembleDebug
 ```
 
-Output: `app/build/outputs/apk/debug/app-debug.apk`.
-
-Install on a connected device: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
-(or open the project in Android Studio and Run).
+Output: `app/build/outputs/apk/debug/app-debug.apk`. Install on a connected
+device: `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
 
 - `compileSdk`/`targetSdk` = 34 (Android 14), `minSdk` = 28. Target device: Galaxy S23 (One UI).
 - Toolchain: AGP 8.7.3, Gradle 8.9, Kotlin 2.0.21, JDK 17+.
 
+### Release signing
+
+Release builds are signed from `keystore.properties` + a keystore file, both of
+which are **gitignored and not in this repo**. A fresh clone therefore builds
+*debug* out of the box; producing a signed release requires your own keystore
+(see `app/build.gradle.kts`). Debug and release use different keys, so switching
+between them on a device requires an uninstall.
+
 ## How it works
 
-### State machine (in `GuardService`)
-`UNARMED → ARMED → TRIGGERED → ALARM`, exactly as in spec §3. A successful owner
-unlock (`ACTION_USER_PRESENT`) from any active state means **disarm** (→ UNARMED);
-the owner must re-arm before leaving the phone again. State is persisted in
-`SharedPreferences` so it survives a service restart.
+### State machine (`GuardService`)
+`UNARMED → ARMED → TRIGGERED → ALARM`. `ARMED` has three sub-modes:
 
-### Motion detection (the important bit, spec §5)
-The spec's default was `TYPE_SIGNIFICANT_MOTION` (zero battery, no wake lock). In
-practice that sensor is slow and insensitive to a quick pickup on many phones and
-unreliable with the screen off, so the **default detection is now the reliable
-path**:
+- **waiting** — just armed; does nothing until the phone is locked (screen off),
+  so placing and locking the phone never self-triggers;
+- **watching** — actively monitoring the accelerometer;
+- **paused (charging)** — see *Pause while charging* below.
 
-- **Standby (ARMED):** hold a `PARTIAL_WAKE_LOCK` and run a **wake-up
-  accelerometer** (`SENSOR_DELAY_UI`). Once the phone has been set down and still
-  for ~0.7 s, its resting orientation is locked in as a baseline. It then triggers
-  the instant it detects either a **tilt** away from that baseline (lifted off a
-  surface) or a **jolt** (grabbed). This fires immediately and keeps working with
-  the screen off. Cost: some battery while armed — acceptable for the target
-  "minutes to tens of minutes" scenario.
-- **Battery-saver mode (optional, off by default):** the original one-shot
-  `TYPE_SIGNIFICANT_MOTION`, no wake lock. A settings toggle for users who want
-  battery savings and whose device cooperates.
-- **Active (TRIGGERED):** acquire/keep the wake lock, run the grace timer, and on
-  expiry sound the alarm unless the owner unlocked. (No second-guessing — the
-  earlier "re-arm if motion wasn't sustained" heuristic was removed because it
-  could swallow real alarms.)
+State is the single source of truth, persisted in `SharedPreferences`, so the
+tile, notification and in-app screen always agree and it survives a restart.
 
-### Sensitivity
-A single slider (0–100) tunes the detection thresholds: higher = a smaller tilt or
-gentler grab triggers. Mappings are documented in `GuardPrefs.sensitivityToTiltDeg`
-and `sensitivityToJoltMs2`. Default 70 (~13° tilt / ~1.5 m/s² jolt).
+By default an owner unlock **keeps the guard armed** (stops any alarm, returns to
+the waiting phase, resumes watching when the phone is next locked). A setting can
+switch this to "unlock fully disarms".
 
-### Siren (spec §8)
-`SirenPlayer` plays `res/raw/siren.wav` looped on `STREAM_ALARM` with
-`USAGE_ALARM` audio attributes, so it sounds through silent/vibrate. On alarm it
-saves and forces the alarm volume to max, and restores it on stop. The siren clip
-is a phase-continuous "wail" generated to loop with no click at the seam.
+### Motion detection
+Default is the reliable path: hold a `PARTIAL_WAKE_LOCK` and run a **wake-up
+accelerometer**. Once the phone has been set down and still for ~0.7 s, its
+resting orientation is locked in as a baseline; it then fires the instant it
+detects a **tilt** off that baseline (lifted) or a **jolt** (grabbed) — and keeps
+working with the screen off. An optional **battery-saver mode** uses the one-shot
+`TYPE_SIGNIFICANT_MOTION` sensor with no wake lock (slower, less reliable).
 
-### Controls (always consistent — single source of truth is the persisted state)
-- **Quick Settings tile** "Guard" (primary): toggles arm/disarm, reflects state.
-- **Foreground-service notification** (secondary): ongoing, low importance while
-  armed/idle (raised for ALARM), with an ARM/DISARM action.
-- **In-app screen** (Compose): big ARM/DISARM button, sensitivity + grace sliders,
-  exemption status/links, boot-survival toggle, and a 3-second test-siren button.
+A single **sensitivity** slider (0–100) tunes the tilt/jolt thresholds
+(`GuardPrefs.sensitivityToTiltDeg` / `sensitivityToJoltMs2`). The settings screen
+shows a **live motion meter** that fills as you move the phone and turns red past
+the current trigger threshold, so you can calibrate by feel.
 
-### Resilience (spec §6.3)
-`START_STICKY`, plus an AlarmManager watchdog (`WatchdogReceiver`) that pokes the
-service ~every 15 min while armed. Optional boot survival (`BootReceiver`, default
-**off**) re-arms after a reboot only if it was armed. If killed mid-ALARM, it
-restores to ARMED rather than resurrecting a siren.
+### Pause while charging (default on)
+While armed and plugged in, the motion alarm is paused; **unplugging instantly
+activates watching** (the café scenario: charging in public, a thief unplugs and
+walks off). This is tamper-proof: only a charger connected while the owner was
+present (before the phone was locked) may pause — a charger connected *after* the
+phone is locked (a thief's power bank) never pauses. The accelerometer keeps
+running through the pause so unplugging starts detection with no blind window.
 
-## Notable implementation decisions
-- **Service only runs while active.** On reaching UNARMED the service stops itself,
-  so there is no permanent notification and zero cost while off. The tile reads
-  state straight from prefs, so it still works with the service stopped. (Spec
-  allows the FGS to run while unarmed; we choose not to.)
-- **`foregroundServiceType="specialUse"`** — there is no built-in FGS type for a
-  device-monitoring/anti-theft alarm; `specialUse` is the correct catch-all on
-  Android 14, declared with the required justification `<property>`.
-- **Watchdog uses `setAndAllowWhileIdle` (inexact)** to avoid needing an
-  exact-alarm permission; a few minutes of drift is fine for a backstop, and the
-  battery-optimization exemption (which the app guides the user to grant) lets the
-  broadcast start the FGS from the background.
-- **Wake lock** is held while armed in the default reliable mode (and through
-  TRIGGERED/ALARM), released on every exit and on destroy, with a 60-minute safety
-  timeout so it can never leak. In battery-saver mode no wake lock is held while
-  armed.
+### Alarm output
+`SirenPlayer` **synthesizes the siren at runtime** with `AudioTrack` (no audio
+asset ships): a seamless loop of five cycling segments (wail, hi-lo two-tone,
+whoop, screech, and a harsh police "yelp"), soft-clipped for loudness, played on
+`STREAM_ALARM`/`USAGE_ALARM` so it sounds through silent/vibrate. On alarm it
+forces the alarm volume to max (saved/restored, and persisted so a crash can't
+leave it pinned). Alongside the siren: continuous max vibration, a **flashlight
+strobe**, and a full-screen white/black **`FlashActivity`** shown over the lock
+screen via a full-screen intent. The flash screen has *no* silence button — only a
+real keyguard unlock stops the alarm.
 
-## Required setup (guided in-app, spec §7)
+### Silencing is unlock-gated (anti-theft guarantee)
+Disarming always requires unlocking the phone, so a thief can't silence it:
+
+- the notification's Disarm action uses `setAuthenticationRequired(true)` (API 31+);
+- the Quick Settings tile disarms via `unlockAndRun`;
+- the service refuses an external disarm while the keyguard is securely locked
+  (defense-in-depth for older versions / stray intents).
+
+### False-alarm guards
+The alarm is suppressed, without any extra permission, when it would clearly be a
+false positive:
+
+- **Phone calls** — if the phone is ringing or in a call (checked via the global
+  audio mode), grabbing it to answer never sounds the alarm.
+- **Already unlocked** — the live keyguard state is the source of truth for "owner
+  is present": if the phone is actually unlocked, motion is ignored. This is a
+  backstop for the rare case where `ACTION_USER_PRESENT` is not delivered, which
+  could otherwise leave the guard watching during normal use.
+
+### Controls & UI
+- **Quick Settings tile** "Guard" — primary arm/disarm, reflects state instantly.
+- **Foreground-service notification** — ongoing status with a Disarm action.
+- **In-app screen** — plain framework Views (no Compose), styled from a design
+  system with dark/light palettes (auto by system theme), per-state status colors,
+  and pulse animations. Big ARM/DISARM, behavior/effects toggles, sensitivity (with
+  the live meter) and grace sliders, guided setup, and an event log. The **Test
+  siren** button toggles: tap once to preview, tap again to stop.
+
+### Resilience
+`START_STICKY`, plus an inexact `AlarmManager` watchdog (`WatchdogReceiver`) that
+pokes the service ~every 15 min while armed. Optional boot survival
+(`BootReceiver`, default **off**) re-arms after a reboot only if it was armed. The
+service only runs while active — on reaching UNARMED it stops itself, so there is
+zero cost while off. Uses `foregroundServiceType="specialUse"` (there is no
+built-in FGS type for an anti-theft alarm).
+
+## Required setup (guided in-app)
 1. Battery optimization exemption (system dialog).
 2. Notifications permission (Android 13+).
 3. Exclude from Samsung "Sleeping apps" (manual — cannot be set programmatically;

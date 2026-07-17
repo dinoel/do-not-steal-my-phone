@@ -1,51 +1,48 @@
 package com.guard
 
+import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
 
 /**
  * Full-screen white/black strobe shown over the lock screen while the guard is in
- * ALARM, to make a stolen phone as visible as possible. It is launched by the
- * ALARM notification's full-screen intent (the standard alarm mechanism) and
- * finishes as soon as the state leaves ALARM (i.e. when the owner unlocks/disarms).
+ * ALARM, to make a stolen phone as visible as possible. Launched by the ALARM
+ * notification's full-screen intent (the standard alarm mechanism) and finishes as
+ * soon as the state leaves ALARM (i.e. when the owner unlocks/disarms).
  *
- * Security: there is deliberately NO button that silences the alarm. The only
- * control is "Unlock to silence", which invokes the real system keyguard — so the
- * alarm can only be stopped by someone who can actually unlock the phone.
+ * Plain framework Views + a Handler color toggle — no Compose. Security: there is
+ * deliberately NO button that silences the alarm; the only control invokes the real
+ * system keyguard, so the alarm stops only for someone who can actually unlock.
  */
-class FlashActivity : ComponentActivity() {
+class FlashActivity : Activity() {
 
     private val prefs by lazy { GuardPrefs(this) }
+    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var root: LinearLayout
+    private var white = true
+
+    private val strobe = object : Runnable {
+        override fun run() {
+            white = !white
+            root.setBackgroundColor(if (white) Color.WHITE else Color.BLACK)
+            handler.postDelayed(this, STROBE_MS)
+        }
+    }
 
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         if (prefs.state != GuardState.ALARM) finish()
@@ -74,7 +71,7 @@ class FlashActivity : ComponentActivity() {
             return
         }
 
-        setContent { FlashScreen(onUnlock = ::promptUnlock) }
+        setContentView(buildUi())
     }
 
     override fun onStart() {
@@ -83,71 +80,71 @@ class FlashActivity : ComponentActivity() {
         if (prefs.state != GuardState.ALARM) finish()
     }
 
+    override fun onResume() {
+        super.onResume()
+        handler.post(strobe)
+    }
+
+    override fun onPause() {
+        handler.removeCallbacks(strobe)
+        super.onPause()
+    }
+
     override fun onStop() {
         prefs.unregisterListener(listener)
         super.onStop()
     }
 
+    private fun buildUi(): View {
+        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.WHITE)
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            // Tapping ANYWHERE brings up the real unlock prompt — no hunting for
+            // the button under a strobing screen.
+            setOnClickListener { promptUnlock() }
+        }
+
+        root.addView(TextView(this).apply {
+            text = "⚠ PHONE ALARM ⚠"
+            setTextColor(Color.RED) // reads on both white and black frames
+            textSize = 30f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        }, lp(dp(24)))
+
+        root.addView(Button(this).apply {
+            text = "Unlock to silence"
+            textSize = 20f
+            setOnClickListener { promptUnlock() }
+        }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+
+        root.addView(TextView(this).apply {
+            text = "Tap anywhere to unlock  •  Back to hide this screen"
+            setTextColor(Color.RED)
+            textSize = 14f
+            gravity = Gravity.CENTER
+        }, lp(dp(24)))
+
+        return root
+    }
+
+    private fun lp(topMargin: Int) =
+        LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { this.topMargin = topMargin }
+
     /** Ask the system keyguard to authenticate; a real unlock fires
-     *  ACTION_USER_PRESENT, which disarms the guard and finishes this screen. */
+     *  ACTION_USER_PRESENT, which stops the alarm and finishes this screen. */
     private fun promptUnlock() {
         val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && km.isKeyguardLocked) {
             km.requestDismissKeyguard(this, null)
         }
     }
-}
 
-@Composable
-private fun FlashScreen(onUnlock: () -> Unit) {
-    // Strobe the background white <-> black quickly.
-    val transition = rememberInfiniteTransition(label = "strobe")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 110, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "phase",
-    )
-    // Snap between the colors directly — animateColorAsState on top of the
-    // transition would smooth the strobe into a gray crossfade and re-animate
-    // (extra recomposition work) every half-period.
-    val bg = if (phase < 0.5f) Color.White else Color.Black
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(bg)
-            // Tapping ANYWHERE brings up the real unlock prompt — no hunting for
-            // the button under a strobing screen.
-            .clickable(onClick = onUnlock),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            // Red reads clearly on both white and black frames.
-            Text(
-                text = "⚠ PHONE ALARM ⚠",
-                color = Color.Red,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 24.dp),
-            )
-            Button(onClick = onUnlock) {
-                Text("Unlock to silence", fontSize = 20.sp)
-            }
-            Text(
-                text = "Tap anywhere to unlock  •  Back to hide this screen",
-                color = Color.Red,
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 24.dp),
-            )
-        }
+    companion object {
+        private const val STROBE_MS = 110L
     }
 }

@@ -1,6 +1,11 @@
 <resources>
-    <!-- Bare window theme; all real colors come from the Compose theme.
-         Uses a platform Material parent so no extra Material dependency is
-         needed just for the pre-Compose window background. -->
-    <style name="Theme.Guard" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Dark base (dark is the primary look). All real colors are applied in code
+         from the design palette; MainActivity swaps to the light palette when the
+         system is in light mode. windowBackground is the dark bg token so cold
+         start shows no light flash. No Material/AppCompat dependency needed. -->
+    <style name="Theme.Guard" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0C0F13</item>
+        <item name="android:statusBarColor">#0C0F13</item>
+        <item name="android:navigationBarColor">#0C0F13</item>
+    </style>
 </resources>

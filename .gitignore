@@ -11,6 +11,8 @@
 .kotlin/
 # Local Claude Code settings
 /.claude/
+# Design handoff bundle (reference only, not built)
+/claude_design_mockups.zip
 # Release signing — never commit these
 *.keystore
 keystore.properties

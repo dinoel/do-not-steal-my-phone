@@ -4,7 +4,6 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 // Load release signing credentials from keystore.properties (gitignored) if present.
@@ -66,18 +65,27 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-    buildFeatures {
-        compose = true
+    packaging {
+        resources {
+            // Strip metadata this app never uses: the Kotlin reflection builtins
+            // (no kotlin-reflect here — only Java Class refs) and various build
+            // marker files. Pure size trimming; nothing here is needed at runtime.
+            excludes += setOf(
+                "/kotlin/**",
+                "**/*.kotlin_builtins",
+                "kotlin-tooling-metadata.json",
+                "META-INF/*.version",
+                "META-INF/**/*.version",
+                "META-INF/androidx/**",
+                "DebugProbesKt.bin",
+            )
+        }
     }
 }
 
 dependencies {
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
+    // No dependencies at all — pure Android framework + Kotlin stdlib. The UI is
+    // framework Views and notifications use the framework Notification APIs
+    // directly, so nothing from AndroidX (and its transitive coroutines /
+    // lifecycle / profileinstaller tree) is pulled in.
 }

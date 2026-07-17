@@ -18,6 +18,7 @@ import android.hardware.TriggerEventListener
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -60,6 +61,7 @@ class GuardService : Service() {
     private lateinit var sensorManager: SensorManager
     private lateinit var powerManager: PowerManager
     private lateinit var notificationManager: NotificationManager
+    private lateinit var audioManager: AudioManager
     private lateinit var siren: SirenPlayer
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -273,6 +275,8 @@ class GuardService : Service() {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        prefs.testSirenActive = false // clean slate; a test never survives a (re)create
         siren = SirenPlayer(this)
         // If the process died mid-alarm, the user's alarm volume was left pinned
         // at max; the saved value is persisted, so put it back now.
@@ -345,6 +349,8 @@ class GuardService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
         cancelGraceTimer()
+        mainHandler.removeCallbacks(testStopRunnable)
+        prefs.testSirenActive = false
         unregisterStandby()
         siren.stop()
         stopAlarmVibration()
@@ -507,9 +513,50 @@ class GuardService : Service() {
         stopSelfAndForeground()
     }
 
+    /**
+     * True when the phone is currently unlocked by its owner (a secure keyguard
+     * that is dismissed). A thief cannot unlock a secure device, so an unlocked
+     * phone means the owner is present. This is a robust backstop: if
+     * ACTION_USER_PRESENT was ever missed (some launchers/OEMs don't reliably
+     * deliver it, e.g. unlocking straight into an app), the guard could keep
+     * watching while the phone is in normal use and sound the siren. Checking the
+     * live keyguard state makes that impossible.
+     */
+    private fun isUnlockedByOwner(): Boolean {
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
+        return km.isDeviceSecure && !km.isKeyguardLocked
+    }
+
+    /**
+     * True while a phone call is ringing or connected (cellular or VoIP). Read
+     * from the global audio mode, which needs NO permission — so picking the phone
+     * up to answer a call never sounds the alarm.
+     */
+    private fun isPhoneBusy(): Boolean {
+        val mode = audioManager.mode
+        return mode == AudioManager.MODE_RINGTONE ||
+            mode == AudioManager.MODE_IN_CALL ||
+            mode == AudioManager.MODE_IN_COMMUNICATION
+    }
+
     /** ARMED -> TRIGGERED. Called from either detection path. */
     private fun onMotionDetected(reason: String = "motion") {
         if (current != GuardState.ARMED) return
+        // Backstop: if the phone is actually unlocked, the owner is present — we
+        // must have missed ACTION_USER_PRESENT. Never alarm during normal use;
+        // resync (stop watching until the phone is locked again / disarm per the
+        // stay-armed setting) instead.
+        if (isUnlockedByOwner()) {
+            Log.i(TAG, "Motion while unlocked — owner present, resyncing")
+            onUserPresent()
+            return
+        }
+        // Ringing/in a call: the owner is grabbing the phone to answer, not a
+        // theft. Ignore the motion and keep watching (no permission needed).
+        if (isPhoneBusy()) {
+            Log.i(TAG, "Motion ignored — phone call in progress")
+            return
+        }
         detectionActive = false
         watchMode = WatchMode.IDLE
         prefs.watching = false
@@ -527,6 +574,21 @@ class GuardService : Service() {
     /** Grace timer elapsed with no owner unlock -> ALARM. */
     private fun onGraceExpired() {
         if (current != GuardState.TRIGGERED) return
+        // The phone was unlocked during the grace window — owner is present (a
+        // missed ACTION_USER_PRESENT, or they unlocked right at expiry). Suppress.
+        if (isUnlockedByOwner()) {
+            logEvent("Unlocked during grace — alarm suppressed")
+            onUserPresent()
+            return
+        }
+        // A call started/was answered during the grace window (e.g. motion began
+        // just before the phone rang): suppress the alarm and go back to watching.
+        if (isPhoneBusy()) {
+            logEvent("Call in progress — alarm suppressed")
+            setState(GuardState.ARMED)
+            enterArmed()
+            return
+        }
         triggerAlarm()
     }
 
@@ -735,17 +797,32 @@ class GuardService : Service() {
 
     // ---- Test siren -------------------------------------------------------
 
+    private val testStopRunnable = Runnable { stopTestSiren() }
+
+    /** Toggle the manual siren test: tapping again stops it immediately. */
     private fun testSiren() {
         if (current == GuardState.ALARM) return // don't fight a real alarm
-        Log.i(TAG, "Test siren (3s)")
+        if (prefs.testSirenActive) {
+            stopTestSiren()
+            return
+        }
+        prefs.testSirenActive = true
         val volInfo = siren.start()
         if (prefs.flashStrobe) startTorchStrobe()
-        logEvent("Test siren (3s) — $volInfo")
-        mainHandler.postDelayed({
-            siren.stop()
-            stopTorchStrobe()
-            if (!current.isActive) stopSelfAndForeground()
-        }, TEST_SIREN_MS)
+        logEvent("Test siren — $volInfo")
+        // Auto-stop after one full cycle if not stopped manually first.
+        mainHandler.postDelayed(testStopRunnable, TEST_SIREN_MS)
+    }
+
+    private fun stopTestSiren() {
+        mainHandler.removeCallbacks(testStopRunnable)
+        if (!prefs.testSirenActive) return
+        prefs.testSirenActive = false
+        siren.stop()
+        stopTorchStrobe()
+        logEvent("Test siren stopped")
+        // If we were only running for the test (not armed), shut down.
+        if (!current.isActive) stopSelfAndForeground()
     }
 
     // ---- Watchdog (AlarmManager backstop) ---------------------------------

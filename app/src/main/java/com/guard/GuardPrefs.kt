@@ -92,6 +92,11 @@ class GuardPrefs(context: Context) {
         get() = prefs.getInt(KEY_SAVED_ALARM_VOLUME, -1)
         set(value) = prefs.edit().putInt(KEY_SAVED_ALARM_VOLUME, value).apply()
 
+    /** True while the manual siren test is playing, so the UI can show a Stop label. */
+    var testSirenActive: Boolean
+        get() = prefs.getBoolean(KEY_TEST_SIREN, false)
+        set(value) = prefs.edit().putBoolean(KEY_TEST_SIREN, value).apply()
+
     /**
      * Append a timestamped line to the rolling event log (kept in the same prefs
      * file, so writing it also notifies the in-app screen's change listener). The
@@ -145,6 +150,7 @@ class GuardPrefs(context: Context) {
         const val KEY_SCREEN_FLASH = "screen_flash"
         const val KEY_LOG = "event_log"
         const val KEY_SAVED_ALARM_VOLUME = "saved_alarm_volume"
+        const val KEY_TEST_SIREN = "test_siren_active"
         private const val MAX_LOG_LINES = 200
 
         const val DEFAULT_SENSITIVITY = 70

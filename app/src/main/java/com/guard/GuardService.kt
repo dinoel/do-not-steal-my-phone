@@ -28,9 +28,8 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.graphics.drawable.Icon
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.sqrt
@@ -306,9 +305,12 @@ class GuardService : Service() {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
         }
-        ContextCompat.registerReceiver(
-            this, screenReceiver, filter, ContextCompat.RECEIVER_EXPORTED
-        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(screenReceiver, filter)
+        }
 
         // Establish foreground status immediately (5-second startForegroundService deadline).
         startForegroundWithState()
@@ -826,20 +828,25 @@ class GuardService : Service() {
 
         // While active this action is always a Disarm. Require the device be
         // unlocked before it fires so a thief can't silence the alarm straight
-        // from the lock-screen notification (enforced by the system, API 31+).
-        val toggleAction = NotificationCompat.Action.Builder(R.drawable.ic_shield, toggleLabel, togglePi)
-            .setAuthenticationRequired(state.isActive)
-            .build()
+        // from the lock-screen notification (enforced by the system, API 31+; on
+        // older versions the service-side keyguard check is the enforcement).
+        val actionBuilder = Notification.Action.Builder(
+            Icon.createWithResource(this, R.drawable.ic_shield), toggleLabel, togglePi
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            actionBuilder.setAuthenticationRequired(state.isActive)
+        }
 
-        val builder = NotificationCompat.Builder(this, channel)
+        // Priority is driven by the channel importance (ALARM channel is HIGH), so
+        // no setPriority is needed on the builder (it's ignored on O+ anyway).
+        val builder = Notification.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_shield)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(title)
             .setOngoing(true) // non-dismissable while the service is up
             .setContentIntent(contentPi)
-            .setCategory(if (state == GuardState.ALARM) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
-            .setPriority(if (state == GuardState.ALARM) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_LOW)
-            .addAction(toggleAction)
+            .setCategory(if (state == GuardState.ALARM) Notification.CATEGORY_ALARM else Notification.CATEGORY_STATUS)
+            .addAction(actionBuilder.build())
 
         // In ALARM, use a full-screen intent to launch the white/black flash over
         // the lock screen (the standard alarm mechanism).
@@ -909,7 +916,7 @@ class GuardService : Service() {
         private const val DETECT_HITS = 2          // consecutive samples to debounce noise
 
         private const val TORCH_INTERVAL_MS = 150L // flashlight strobe half-period
-        private const val TEST_SIREN_MS = 9000L // one full cycle of the 4 alarm sounds
+        private const val TEST_SIREN_MS = 11000L // one full cycle of the 5 alarm sounds
         private const val WATCHDOG_INTERVAL_MS = 15 * 60 * 1000L
 
         fun serviceIntent(context: Context, action: String): Intent =
@@ -921,7 +928,7 @@ class GuardService : Service() {
             // the background without the battery-optimization exemption; log rather
             // than crash. START_STICKY is the primary restart path anyway.
             runCatching {
-                ContextCompat.startForegroundService(context, serviceIntent(context, action))
+                context.startForegroundService(serviceIntent(context, action))
             }.onFailure {
                 Log.w(TAG, "startForegroundService($action) failed", it)
                 // Make the failure visible in the in-app event log for diagnosis.

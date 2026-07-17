@@ -148,7 +148,7 @@ class SirenPlayer(context: Context) {
                 1 -> if ((t / 0.35).toInt() % 2 == 0) 2600.0 else 1950.0 // hi-lo two-tone
                 2 -> 1400.0 + 1800.0 * ((t * 3.0) % 1.0)         // rising whoop, 3/sec
                 3 -> 2800.0 + 60.0 * sin(twoPi * 7.0 * t)        // screech w/ vibrato
-                else -> 1700.0 + 2000.0 * ((t * 7.0) % 1.0)      // police "yelp"/крякалка: fast up-sweep 7/sec
+                else -> 1700.0 + 2000.0 * ((t * 7.0) % 1.0)      // police "yelp": fast up-sweep, 7/sec
             }
             phase += twoPi * freq / sr
             if (phase > twoPi) phase -= twoPi

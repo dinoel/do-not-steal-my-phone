@@ -80,6 +80,16 @@ strobe**, and a full-screen white/black **`FlashActivity`** shown over the lock
 screen via a full-screen intent. The flash screen has *no* silence button — only a
 real keyguard unlock stops the alarm.
 
+### Voice announcement
+Optionally, `Announcer` speaks a warning over the siren using the **on-device
+TextToSpeech engine** — no audio asset, no network, no permission (only a
+`<queries>` entry so the app may bind the TTS service on Android 11+). The phrase
+and the language are configurable in the app; picking a language fills in a
+sensible default sentence for it unless a custom phrase was typed. The phrase
+repeats with a short gap, is spoken slightly faster than normal for urgency, and
+the siren ducks while it plays so it stays intelligible. If no engine or voice
+data is available the app stays silent and the siren plays alone.
+
 ### Silencing is unlock-gated (anti-theft guarantee)
 Disarming always requires unlocking the phone, so a thief can't silence it:
 

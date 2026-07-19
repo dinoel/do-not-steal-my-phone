@@ -28,11 +28,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -87,6 +90,38 @@ class MainActivity : Activity() {
     private lateinit var notifButton: Button
     private lateinit var logContainer: LinearLayout
     private lateinit var testSirenButton: Button
+    private lateinit var voiceSwitch: Switch
+    private lateinit var announceEdit: EditText
+    private lateinit var languageButton: Button
+
+    /** (BCP-47 tag, display name); "" = follow the device language. */
+    private val languages = listOf(
+        "" to "Device default", "en" to "English", "ru" to "Русский",
+        "es" to "Español", "de" to "Deutsch", "fr" to "Français", "it" to "Italiano",
+        "pt" to "Português", "nl" to "Nederlands", "pl" to "Polski", "uk" to "Українська",
+        "tr" to "Türkçe", "ar" to "العربية", "hi" to "हिन्दी", "zh" to "中文",
+        "ja" to "日本語", "ko" to "한국어",
+    )
+
+    /** Suggested announcement phrase per language code — auto-filled when a
+     *  language is picked, unless the user has typed their own text. */
+    private val langDefaults = mapOf(
+        "en" to "This phone has been stolen.",
+        "de" to "Achtung! Dieses Handy wurde gestohlen!",
+        "ru" to "Внимание! Этот телефон украден!",
+        "es" to "¡Atención! Este teléfono ha sido robado!",
+        "fr" to "Attention! Ce téléphone a été volé!",
+        "it" to "Attenzione! Questo telefono è stato rubato!",
+        "pt" to "Atenção! Este telefone foi roubado!",
+    )
+    private val knownDefaults by lazy {
+        langDefaults.values.toSet() + GuardPrefs.DEFAULT_ANNOUNCE_TEXT
+    }
+
+    private val saveAnnounceText = Runnable {
+        val text = announceEdit.text.toString()
+        prefs.announceText = if (text.isBlank()) GuardPrefs.DEFAULT_ANNOUNCE_TEXT else text
+    }
 
     // Live motion meter (calibration preview shown under Sensitivity).
     private lateinit var meterTrack: android.widget.FrameLayout
@@ -162,6 +197,11 @@ class MainActivity : Activity() {
     override fun onPause() {
         runCatching { unregisterReceiver(powerReceiver) }
         sensorManager?.unregisterListener(accelListener)
+        // Flush any pending announcement-text edit immediately.
+        if (::announceEdit.isInitialized) {
+            announceEdit.removeCallbacks(saveAnnounceText)
+            saveAnnounceText.run()
+        }
         stopPulse()
         stopAlarmPulse()
         super.onPause()
@@ -229,6 +269,48 @@ class MainActivity : Activity() {
             screenFlashSwitch = toggleRow(card, "Screen flash",
                 "Flash the screen white/black over the lock screen.", false
             ) { prefs.screenFlash = it }
+        }, gap(12))
+
+        // Voice announcement
+        column.addView(cardWith("VOICE ANNOUNCEMENT") { card ->
+            voiceSwitch = toggleRow(card, "Voice announcement",
+                "Speak a warning aloud between siren cycles (device text-to-speech).", true
+            ) { prefs.voiceAnnouncement = it }
+            divider(card)
+            card.addView(fieldLabel("What it says"))
+            announceEdit = EditText(this).apply {
+                setText(prefs.announceText)
+                textSize = 15f
+                setTextColor(pal.text)
+                setHintTextColor(pal.text3)
+                background = roundRect(pal.elevated, 10f, pal.border, 1.5f)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                    override fun afterTextChanged(s: Editable?) {
+                        // Debounced save so we don't re-render on every keystroke.
+                        removeCallbacks(saveAnnounceText)
+                        postDelayed(saveAnnounceText, 400)
+                    }
+                })
+            }
+            card.addView(announceEdit, wide().apply { topMargin = dp(6) })
+            divider(card)
+            val langRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(13), 0, dp(13))
+            }
+            val langTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            langTexts.addView(TextView(this).apply {
+                text = "Language"; textSize = 15f; setTypeface(typeface, Typeface.BOLD)
+                setTextColor(pal.text)
+            })
+            langTexts.addView(caption("Uses the phone's installed voices."))
+            langRow.addView(langTexts, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            languageButton = actionButton(currentLangName(), solid = false) { showLanguageDialog() }
+            langRow.addView(languageButton)
+            card.addView(langRow, wide())
         }, gap(12))
 
         // Sensitivity
@@ -455,6 +537,42 @@ class MainActivity : Activity() {
         this.text = text; textSize = 12.5f; setTextColor(pal.text2); setPadding(0, dp(3), 0, 0)
     }
 
+    private fun fieldLabel(text: String) = TextView(this).apply {
+        this.text = text; textSize = 12.5f; setTypeface(typeface, Typeface.BOLD)
+        setTextColor(pal.text2); setPadding(0, dp(4), 0, dp(2))
+    }
+
+    private fun currentLangName(): String {
+        val tag = prefs.announceLang
+        return languages.firstOrNull { it.first == tag }?.second ?: tag
+    }
+
+    private fun defaultTextFor(tag: String): String {
+        val key = tag.ifBlank { Locale.getDefault().language }
+        return langDefaults[key] ?: GuardPrefs.DEFAULT_ANNOUNCE_TEXT
+    }
+
+    private fun showLanguageDialog() {
+        val names = languages.map { it.second }.toTypedArray()
+        val checked = languages.indexOfFirst { it.first == prefs.announceLang }.coerceAtLeast(0)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Announcement language")
+            .setSingleChoiceItems(names, checked) { dialog, which ->
+                val tag = languages[which].first
+                prefs.announceLang = tag
+                languageButton.text = languages[which].second
+                // Auto-fill this language's phrase unless the user typed a custom one.
+                val current = announceEdit.text.toString().trim()
+                if (current.isEmpty() || current in knownDefaults) {
+                    val def = defaultTextFor(tag)
+                    announceEdit.setText(def)
+                    prefs.announceText = def
+                }
+                dialog.dismiss()
+            }
+            .show()
+    }
+
     private fun statusLine() = TextView(this).apply {
         textSize = 12.5f; setPadding(0, dp(2), 0, 0)
     }
@@ -622,6 +740,8 @@ class MainActivity : Activity() {
         screenFlashSwitch.isChecked = prefs.screenFlash
         bootSurvivalSwitch.isChecked = prefs.bootSurvival
         lowPowerSwitch.isChecked = prefs.lowPowerMode
+        voiceSwitch.isChecked = prefs.voiceAnnouncement
+        languageButton.text = currentLangName() // never touch announceEdit here (would disrupt typing)
 
         val sens = prefs.sensitivity
         sensitivityValue.text = sensitivityText(sens)

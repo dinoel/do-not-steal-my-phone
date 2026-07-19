@@ -35,6 +35,14 @@
         android:name="android.hardware.camera.flash"
         android:required="false" />
 
+    <!-- Package visibility (Android 11+): allow binding to the on-device
+         text-to-speech engine for the spoken alarm announcement. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <!-- allowBackup=false: the prefs hold the event log (a timestamped record of
          when the phone is locked/moved/charged) and the armed state — neither
          belongs in a cloud backup or a device transfer. The rule files below

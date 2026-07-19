@@ -88,6 +88,12 @@ class SirenPlayer(context: Context) {
         return summary
     }
 
+    /** Lower the siren while the voice announcement speaks, so it stays intelligible. */
+    fun duck(ducked: Boolean) {
+        val max = AudioTrack.getMaxVolume()
+        runCatching { track?.setVolume(if (ducked) 0.10f * max else max) }
+    }
+
     /** Stop immediately and restore the previous alarm volume. Idempotent. */
     fun stop() {
         track?.let {

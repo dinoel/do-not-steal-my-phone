@@ -63,6 +63,7 @@ class GuardService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var audioManager: AudioManager
     private lateinit var siren: SirenPlayer
+    private lateinit var announcer: Announcer
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -278,6 +279,8 @@ class GuardService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         prefs.testSirenActive = false // clean slate; a test never survives a (re)create
         siren = SirenPlayer(this)
+        // The voice announcement ducks the siren while it speaks.
+        announcer = Announcer(this) { speaking -> siren.duck(speaking) }
         // If the process died mid-alarm, the user's alarm volume was left pinned
         // at max; the saved value is persisted, so put it back now.
         siren.restoreLeftoverVolume()
@@ -353,6 +356,7 @@ class GuardService : Service() {
         prefs.testSirenActive = false
         unregisterStandby()
         siren.stop()
+        announcer.shutdown()
         stopAlarmVibration()
         stopTorchStrobe()
         releaseWakeLock()
@@ -367,6 +371,7 @@ class GuardService : Service() {
         Log.i(TAG, "ARM (from $current)")
         cancelGraceTimer()
         siren.stop()
+        announcer.stop()
         stopAlarmVibration()
         stopTorchStrobe()
         setState(GuardState.ARMED)
@@ -499,6 +504,7 @@ class GuardService : Service() {
         cancelGraceTimer()
         unregisterStandby()
         siren.stop()
+        announcer.stop()
         stopAlarmVibration()
         stopTorchStrobe()
         releaseWakeLock()
@@ -601,6 +607,7 @@ class GuardService : Service() {
         startAlarmVibration()
         if (prefs.flashStrobe) startTorchStrobe()
         val volInfo = siren.start()
+        if (prefs.voiceAnnouncement) announcer.start(prefs.announceText, prefs.announceLang)
         logEvent("ALARM — siren + vibration${if (prefs.flashStrobe) " + flashlight" else ""} on ($volInfo)")
     }
 
@@ -622,6 +629,7 @@ class GuardService : Service() {
     private fun reArmAfterUnlock() {
         cancelGraceTimer()
         siren.stop()
+        announcer.stop()
         stopAlarmVibration()
         stopTorchStrobe()
         logEvent("Unlocked — alarm stopped, still armed")
@@ -809,6 +817,7 @@ class GuardService : Service() {
         prefs.testSirenActive = true
         val volInfo = siren.start()
         if (prefs.flashStrobe) startTorchStrobe()
+        if (prefs.voiceAnnouncement) announcer.start(prefs.announceText, prefs.announceLang)
         logEvent("Test siren — $volInfo")
         // Auto-stop after one full cycle if not stopped manually first.
         mainHandler.postDelayed(testStopRunnable, TEST_SIREN_MS)
@@ -819,6 +828,7 @@ class GuardService : Service() {
         if (!prefs.testSirenActive) return
         prefs.testSirenActive = false
         siren.stop()
+        announcer.stop()
         stopTorchStrobe()
         logEvent("Test siren stopped")
         // If we were only running for the test (not armed), shut down.

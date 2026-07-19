@@ -97,6 +97,21 @@ class GuardPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_TEST_SIREN, false)
         set(value) = prefs.edit().putBoolean(KEY_TEST_SIREN, value).apply()
 
+    /** Speak a spoken warning during the alarm (device text-to-speech). Default on. */
+    var voiceAnnouncement: Boolean
+        get() = prefs.getBoolean(KEY_VOICE, true)
+        set(value) = prefs.edit().putBoolean(KEY_VOICE, value).apply()
+
+    /** The phrase spoken during the alarm. */
+    var announceText: String
+        get() = prefs.getString(KEY_ANNOUNCE_TEXT, DEFAULT_ANNOUNCE_TEXT) ?: DEFAULT_ANNOUNCE_TEXT
+        set(value) = prefs.edit().putString(KEY_ANNOUNCE_TEXT, value).apply()
+
+    /** BCP-47 language tag for the announcement; "" = device default. */
+    var announceLang: String
+        get() = prefs.getString(KEY_ANNOUNCE_LANG, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_ANNOUNCE_LANG, value).apply()
+
     /**
      * Append a timestamped line to the rolling event log (kept in the same prefs
      * file, so writing it also notifies the in-app screen's change listener). The
@@ -151,6 +166,10 @@ class GuardPrefs(context: Context) {
         const val KEY_LOG = "event_log"
         const val KEY_SAVED_ALARM_VOLUME = "saved_alarm_volume"
         const val KEY_TEST_SIREN = "test_siren_active"
+        const val KEY_VOICE = "voice_announcement"
+        const val KEY_ANNOUNCE_TEXT = "announce_text"
+        const val KEY_ANNOUNCE_LANG = "announce_lang"
+        const val DEFAULT_ANNOUNCE_TEXT = "This phone has been stolen."
         private const val MAX_LOG_LINES = 200
 
         const val DEFAULT_SENSITIVITY = 70

@@ -8,7 +8,8 @@ someone who can actually unlock the phone silences it.
 
 Kotlin, plain framework Views, ordinary APK — **no root, no device owner, no MDM,
 no network/cloud, and zero third-party dependencies** (only the Android framework
-and the Kotlin stdlib). The release APK is **~86 KB**.
+and the Kotlin stdlib; JUnit is test-only and never packaged). The release APK is
+**~95 KB**.
 
 ## Build
 
@@ -22,6 +23,30 @@ device: `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
 
 - `compileSdk`/`targetSdk` = 34 (Android 14), `minSdk` = 28. Target device: Galaxy S23 (One UI).
 - Toolchain: AGP 8.7.3, Gradle 8.9, Kotlin 2.0.21, JDK 17+.
+
+### Tests
+
+```bash
+./gradlew :app:testDebugUnitTest        # report: app/build/reports/tests/testDebugUnitTest/
+```
+
+Plain JVM JUnit — no emulator, no device, no Robolectric. This is possible
+because the logic worth testing was deliberately kept free of Android types:
+
+- **`WatchGate`** — every "should we watch / may we alarm / may we disarm" rule as
+  a pure function. These are the decisions where a mistake is a security hole
+  rather than a bug: the disarm-while-locked refusal, the power-bank rule (a
+  charger connected after the phone was locked never pauses the alarm), and the
+  call / already-unlocked suppressions.
+- **`MotionAnalyzer`** — baselining and tilt/jolt detection, driven by synthetic
+  accelerometer samples: a resting phone and small noise stay quiet, a tilt or a
+  snatch fires, a single stray sample is debounced away, and the sensitivity
+  slider provably changes what counts as a pickup.
+- **`GuardState`** / the sensitivity mappings — the persisted-name round-trip with
+  its fallback, and the slider-to-threshold curves.
+
+JUnit is a `testImplementation` dependency: it runs on the JVM and is never
+packaged into the APK, which still ships zero third-party code.
 
 ### Release signing
 
@@ -55,6 +80,10 @@ resting orientation is locked in as a baseline; it then fires the instant it
 detects a **tilt** off that baseline (lifted) or a **jolt** (grabbed) — and keeps
 working with the screen off. An optional **battery-saver mode** uses the one-shot
 `TYPE_SIGNIFICANT_MOTION` sensor with no wake lock (slower, less reliable).
+
+The maths itself lives in `MotionAnalyzer` — a pure class with no Android types,
+so it is directly unit-tested (see [Tests](#tests)); `GuardService` only owns the
+sensor registration and decides what a detection *means*.
 
 A single **sensitivity** slider (0–100) tunes the tilt/jolt thresholds
 (`GuardPrefs.sensitivityToTiltDeg` / `sensitivityToJoltMs2`). The settings screen

@@ -84,8 +84,14 @@ android {
 }
 
 dependencies {
-    // No dependencies at all — pure Android framework + Kotlin stdlib. The UI is
-    // framework Views and notifications use the framework Notification APIs
-    // directly, so nothing from AndroidX (and its transitive coroutines /
+    // No *shipped* dependencies at all — pure Android framework + Kotlin stdlib.
+    // The UI is framework Views and notifications use the framework Notification
+    // APIs directly, so nothing from AndroidX (and its transitive coroutines /
     // lifecycle / profileinstaller tree) is pulled in.
+
+    // Test-only, JVM-only: never packaged into the APK. The tested classes
+    // (MotionAnalyzer, WatchGate, GuardState, the sensitivity mappings) are
+    // deliberately free of Android types, so plain JUnit is enough — no
+    // Robolectric, no instrumentation, no emulator.
+    testImplementation(libs.junit)
 }

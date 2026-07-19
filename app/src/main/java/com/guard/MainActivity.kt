@@ -77,6 +77,7 @@ class MainActivity : Activity() {
     private lateinit var stayArmedSwitch: Switch
     private lateinit var pauseChargingSwitch: Switch
     private lateinit var pocketModeSwitch: Switch
+    private lateinit var pocketStatus: TextView
     private lateinit var flashStrobeSwitch: Switch
     private lateinit var screenFlashSwitch: Switch
     private lateinit var bootSurvivalSwitch: Switch
@@ -134,6 +135,23 @@ class MainActivity : Activity() {
     private var sensorManager: SensorManager? = null
     private var accelSensor: Sensor? = null
 
+    // Live proximity readout under the Pocket mode toggle. Purely a hardware
+    // check: it tells you at a glance whether this phone's proximity sensor
+    // actually reports covered/uncovered, which is the first thing to know when
+    // pocket mode seems not to fire.
+    private var proximitySensor: Sensor? = null
+    private var proximityNear: Boolean? = null
+
+    private val proximityListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            val sensor = e.sensor ?: return
+            proximityNear = PocketDetector.isNear(e.values[0], sensor.maximumRange)
+            renderPocketStatus()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
     private val accelListener = object : SensorEventListener {
         override fun onSensorChanged(e: SensorEvent) {
             val x = e.values[0]; val y = e.values[1]; val z = e.values[2]
@@ -187,10 +205,15 @@ class MainActivity : Activity() {
         if (sensorManager == null) {
             sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
             accelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
         }
         meterSmoothed = 0f
         accelSensor?.let {
             sensorManager?.registerListener(accelListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
+        proximityNear = null
+        proximitySensor?.let {
+            sensorManager?.registerListener(proximityListener, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
         render()
     }
@@ -198,6 +221,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         runCatching { unregisterReceiver(powerReceiver) }
         sensorManager?.unregisterListener(accelListener)
+        sensorManager?.unregisterListener(proximityListener)
         // Flush any pending announcement-text edit immediately.
         if (::announceEdit.isInitialized) {
             announceEdit.removeCallbacks(saveAnnounceText)
@@ -262,7 +286,13 @@ class MainActivity : Activity() {
             divider(card)
             pocketModeSwitch = toggleRow(card, "Pocket mode",
                 "Also alarm when the phone is pulled out of a pocket or bag.", false
-            ) { prefs.pocketMode = it }
+            ) { prefs.pocketMode = it; nudgeService() }
+            pocketStatus = TextView(this).apply {
+                textSize = 12f
+                setTextColor(pal.text3)
+                setPadding(0, 0, 0, dp(10))
+            }
+            card.addView(pocketStatus, wide())
         }, gap(12))
 
         // Alarm effects
@@ -370,7 +400,7 @@ class MainActivity : Activity() {
             divider(card)
             lowPowerSwitch = toggleRow(card, "Battery-saver detection",
                 "Low-power sensor: saves battery but slower & less reliable.", false
-            ) { prefs.lowPowerMode = it }
+            ) { prefs.lowPowerMode = it; nudgeService() }
         }, gap(12))
 
         // Test siren
@@ -392,6 +422,32 @@ class MainActivity : Activity() {
             setBackgroundColor(pal.bg)
             isFillViewport = true
             addView(column)
+        }
+    }
+
+    /**
+     * Settings are read by the service when it (re)registers its sensors, so a
+     * change made while the guard is already running would otherwise only take
+     * effect at the next watchdog tick. Poke the service to re-assert now.
+     */
+    private fun nudgeService() {
+        if (prefs.state.isActive) GuardService.send(this, GuardService.ACTION_SELF_CHECK)
+    }
+
+    /**
+     * Live proximity readout: tells you whether this phone's sensor actually
+     * reports covered/uncovered, which is the first thing to check when pocket
+     * mode does not fire. Only meaningful while the app is open — while armed the
+     * service owns the sensor.
+     */
+    private fun renderPocketStatus() {
+        if (!::pocketStatus.isInitialized) return
+        pocketStatus.text = when {
+            proximitySensor == null -> "No proximity sensor on this phone — pocket mode cannot work."
+            !prefs.pocketMode -> "Sensor available. Turn on to use it."
+            proximityNear == null -> "Sensor: waiting for a reading…"
+            proximityNear == true -> "Sensor now: COVERED — uncover to test the trigger."
+            else -> "Sensor now: uncovered. Cover it for 2s, then uncover."
         }
     }
 
@@ -770,6 +826,7 @@ class MainActivity : Activity() {
         stayArmedSwitch.isChecked = prefs.stayArmedAfterUnlock
         pauseChargingSwitch.isChecked = prefs.pauseWhileCharging
         pocketModeSwitch.isChecked = prefs.pocketMode
+        renderPocketStatus()
         flashStrobeSwitch.isChecked = prefs.flashStrobe
         screenFlashSwitch.isChecked = prefs.screenFlash
         bootSurvivalSwitch.isChecked = prefs.bootSurvival

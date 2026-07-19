@@ -110,6 +110,9 @@ class GuardService : Service() {
     /** "Removed from a pocket" detection (pure — see [PocketDetector]). */
     private val pocket = PocketDetector()
 
+    /** Last logged proximity state, so only transitions reach the event log. */
+    private var lastProximityNear: Boolean? = null
+
     // ---- Standby: one-shot significant motion (low-power mode) ------------
 
     private val triggerListener = object : TriggerEventListener() {
@@ -171,12 +174,21 @@ class GuardService : Service() {
         override fun onSensorChanged(event: SensorEvent) {
             val sensor = event.sensor ?: return
             val near = PocketDetector.isNear(event.values[0], sensor.maximumRange)
+            if (near != lastProximityNear) {
+                lastProximityNear = near
+                // Proximity is event-driven (a handful of events per pocket cycle),
+                // so logging every transition is cheap and makes it obvious after
+                // the fact whether the sensor reported anything at all.
+                logEvent(if (near) "Proximity: covered" else "Proximity: uncovered")
+            }
             val removed = pocket.onSample(near, SystemClock.elapsedRealtime())
             // Only WATCHING may alarm; while charging-paused the readings just keep
             // the detector's near/far state current, exactly like the baseline.
             if (removed && detectionActive) {
                 Log.i(TAG, "Removed from pocket")
                 onMotionDetected("removed from pocket")
+            } else if (removed) {
+                logEvent("Removed from pocket — ignored (not watching)")
             }
         }
 
@@ -646,11 +658,22 @@ class GuardService : Service() {
         if (!prefs.pocketMode) return
         val sensor = proximitySensor ?: run {
             Log.w(TAG, "No proximity sensor — pocket mode unavailable")
+            logEvent("Pocket mode ON but this phone has no proximity sensor")
             return
         }
         pocket.reset()
-        sensorManager.registerListener(proximityListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
-        Log.i(TAG, "Pocket mode: proximity sensor registered")
+        val ok = sensorManager.registerListener(
+            proximityListener, sensor, SensorManager.SENSOR_DELAY_NORMAL
+        )
+        Log.i(TAG, "Pocket mode: proximity registered=$ok (${sensor.name})")
+        // Log the sensor's identity once: whether it is a wake-up sensor and what
+        // range it reports is exactly what is needed to explain a phone where
+        // pocket mode never fires.
+        logEvent(
+            if (ok) "Pocket mode watching (${sensor.name}, max ${sensor.maximumRange}cm" +
+                (if (sensor.isWakeUpSensor) ", wake-up)" else ", non-wake-up)")
+            else "Pocket mode: proximity sensor refused to register"
+        )
     }
 
     private fun unregisterStandby() {
@@ -658,6 +681,7 @@ class GuardService : Service() {
         sensorManager.unregisterListener(standbyAccelListener)
         sensorManager.unregisterListener(proximityListener)
         pocket.reset()
+        lastProximityNear = null
         sensorsRunning = false
     }
 

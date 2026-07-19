@@ -76,7 +76,9 @@ class MainActivity : Activity() {
     private lateinit var armButton: Button
     private lateinit var stayArmedSwitch: Switch
     private lateinit var pauseChargingSwitch: Switch
-    private lateinit var pocketModeSwitch: Switch
+    private lateinit var modeRestingButton: Button
+    private lateinit var modeCarriedButton: Button
+    private lateinit var modeExplain: TextView
     private lateinit var pocketStatus: TextView
     private lateinit var flashStrobeSwitch: Switch
     private lateinit var screenFlashSwitch: Switch
@@ -274,6 +276,23 @@ class MainActivity : Activity() {
         column.addView(buildArmButton(), gap(12))
         column.addView(buildSecondaryButton(), gap(8))
 
+        // Guard mode
+        column.addView(cardWith("GUARD MODE") { card ->
+            card.addView(buildModeSelector(), wide())
+            modeExplain = TextView(this).apply {
+                textSize = 12.5f
+                setTextColor(pal.text2)
+                setPadding(0, dp(10), 0, 0)
+            }
+            card.addView(modeExplain, wide())
+            pocketStatus = TextView(this).apply {
+                textSize = 12f
+                setTextColor(pal.text3)
+                setPadding(0, dp(6), 0, dp(10))
+            }
+            card.addView(pocketStatus, wide())
+        }, gap(12))
+
         // Behavior
         column.addView(cardWith("BEHAVIOR") { card ->
             stayArmedSwitch = toggleRow(card, "Stay armed after unlock",
@@ -283,16 +302,6 @@ class MainActivity : Activity() {
             pauseChargingSwitch = toggleRow(card, "Pause while charging",
                 "Unplugging in public instantly activates watching.", false
             ) { prefs.pauseWhileCharging = it }
-            divider(card)
-            pocketModeSwitch = toggleRow(card, "Pocket mode",
-                "Also alarm when the phone is pulled out of a pocket or bag.", false
-            ) { prefs.pocketMode = it; nudgeService() }
-            pocketStatus = TextView(this).apply {
-                textSize = 12f
-                setTextColor(pal.text3)
-                setPadding(0, 0, 0, dp(10))
-            }
-            card.addView(pocketStatus, wide())
         }, gap(12))
 
         // Alarm effects
@@ -426,6 +435,65 @@ class MainActivity : Activity() {
     }
 
     /**
+     * Two-option segmented control. A radio-style choice rather than a switch,
+     * because the modes are opposite intentions, not a feature you add on: in
+     * Carried, movement is expected and ignored; in Resting, movement is the whole
+     * point.
+     */
+    private fun buildModeSelector(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = roundRect(pal.elevated, 12f, pal.border, 1.5f)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        modeRestingButton = modeButton("Resting") { setMode(GuardMode.RESTING) }
+        modeCarriedButton = modeButton("Carried") { setMode(GuardMode.CARRIED) }
+        row.addView(modeRestingButton, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        row.addView(modeCarriedButton, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        return row
+    }
+
+    private fun modeButton(label: String, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 14.5f
+            setPadding(0, dp(11), 0, dp(11))
+            stateListAnimator = null
+            setOnClickListener { onClick() }
+        }
+
+    private fun setMode(mode: GuardMode) {
+        if (prefs.guardMode == mode) return
+        prefs.guardMode = mode
+        nudgeService() // takes effect now, not at the next watchdog tick
+        render()
+    }
+
+    /** Paint the selected segment and explain what the choice means. */
+    private fun renderModeSelector() {
+        if (!::modeRestingButton.isInitialized) return
+        val mode = prefs.guardMode
+        for ((button, isSelected) in listOf(
+            modeRestingButton to (mode == GuardMode.RESTING),
+            modeCarriedButton to (mode == GuardMode.CARRIED),
+        )) {
+            button.background = if (isSelected) roundRect(pal.brand, 9f) else null
+            button.setTextColor(if (isSelected) Color.WHITE else pal.text2)
+            button.setTypeface(button.typeface, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
+        }
+        modeExplain.text = when (mode) {
+            GuardMode.RESTING ->
+                "Phone or bag left somewhere. Any movement sounds the alarm."
+            GuardMode.CARRIED ->
+                "Phone on you, in a pocket or bag. Movement is ignored while the " +
+                    "sensor is covered; taking the phone out starts the countdown, " +
+                    "so unlock it and nothing happens. Uncovered, it guards on " +
+                    "movement as usual."
+        }
+    }
+
+    /**
      * Settings are read by the service when it (re)registers its sensors, so a
      * change made while the guard is already running would otherwise only take
      * effect at the next watchdog tick. Poke the service to re-assert now.
@@ -443,12 +511,14 @@ class MainActivity : Activity() {
     private fun renderPocketStatus() {
         if (!::pocketStatus.isInitialized) return
         pocketStatus.text = when {
-            proximitySensor == null -> "No proximity sensor on this phone — pocket mode cannot work."
-            !prefs.pocketMode -> "Sensor available. Turn on to use it."
+            prefs.guardMode != GuardMode.CARRIED -> ""
+            proximitySensor == null ->
+                "No proximity sensor on this phone — Carried mode falls back to guarding on movement."
             proximityNear == null -> "Sensor: waiting for a reading…"
-            proximityNear == true -> "Sensor now: COVERED — uncover to test the trigger."
-            else -> "Sensor now: uncovered. Cover it for 2s, then uncover."
+            proximityNear == true -> "Sensor now: COVERED — movement is ignored."
+            else -> "Sensor now: uncovered — guarding on movement."
         }
+        pocketStatus.visibility = if (pocketStatus.text.isEmpty()) View.GONE else View.VISIBLE
     }
 
     /**
@@ -825,7 +895,7 @@ class MainActivity : Activity() {
 
         stayArmedSwitch.isChecked = prefs.stayArmedAfterUnlock
         pauseChargingSwitch.isChecked = prefs.pauseWhileCharging
-        pocketModeSwitch.isChecked = prefs.pocketMode
+        renderModeSelector()
         renderPocketStatus()
         flashStrobeSwitch.isChecked = prefs.flashStrobe
         screenFlashSwitch.isChecked = prefs.screenFlash

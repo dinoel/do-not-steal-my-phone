@@ -57,6 +57,19 @@ object WatchGate {
     fun chargerMayPause(hasBeenLocked: Boolean): Boolean = !hasBeenLocked
 
     /**
+     * In [GuardMode.CARRIED], movement is the owner walking around, so tilt/jolt
+     * must not alarm while the phone is covered. The instant it is uncovered the
+     * mode behaves like [GuardMode.RESTING] again — a phone taken out and set down
+     * is guarded without changing a setting.
+     *
+     * [covered] is null when the proximity state is unknown (no sensor, or nothing
+     * reported yet). That must NOT suppress motion: a phone with no usable
+     * proximity sensor has to keep the protection it had.
+     */
+    fun motionSuppressed(mode: GuardMode, covered: Boolean?): Boolean =
+        mode == GuardMode.CARRIED && covered == true
+
+    /**
      * ANTI-THEFT GUARANTEE: an external disarm (notification action, tile, stray
      * intent) is refused while the phone is *securely* locked, so silencing the
      * alarm always requires a real unlock. A device with no lock set at all has

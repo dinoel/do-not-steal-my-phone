@@ -149,18 +149,29 @@ class GuardService : Service() {
                     )
                 }
 
-                MotionAnalyzer.Outcome.THRESHOLD_HIT -> if (detectionActive) {
-                    val reason = "tilt ${"%.0f".format(analyzer.tiltDeg)}° / " +
-                        "jolt ${"%.1f".format(analyzer.jolt)}"
-                    Log.i(TAG, "Pickup detected ($reason)")
-                    onMotionDetected(reason)
-                } else {
+                MotionAnalyzer.Outcome.THRESHOLD_HIT -> when {
                     // Charging-paused: the phone was legitimately moved (e.g. the
                     // owner repositioned it on the charger). Adopt the new resting
                     // position so unplug-detection stays instant AND accurate —
                     // never alarm from here.
-                    Log.i(TAG, "Moved while charging-paused — re-baselining")
-                    analyzer.rebaseline(now)
+                    !detectionActive -> {
+                        Log.i(TAG, "Moved while charging-paused — re-baselining")
+                        analyzer.rebaseline(now)
+                    }
+
+                    // Carried in a covered pocket/bag: this is the owner walking.
+                    // Re-baseline so that the moment it is uncovered, detection is
+                    // accurate against wherever the phone ends up.
+                    WatchGate.motionSuppressed(prefs.guardMode, lastProximityNear) -> {
+                        analyzer.rebaseline(now)
+                    }
+
+                    else -> {
+                        val reason = "tilt ${"%.0f".format(analyzer.tiltDeg)}° / " +
+                            "jolt ${"%.1f".format(analyzer.jolt)}"
+                        Log.i(TAG, "Pickup detected ($reason)")
+                        onMotionDetected(reason)
+                    }
                 }
             }
         }
@@ -655,10 +666,10 @@ class GuardService : Service() {
      * cost is negligible even in battery-saver mode.
      */
     private fun registerPocketMode() {
-        if (!prefs.pocketMode) return
+        if (prefs.guardMode != GuardMode.CARRIED) return
         val sensor = proximitySensor ?: run {
-            Log.w(TAG, "No proximity sensor — pocket mode unavailable")
-            logEvent("Pocket mode ON but this phone has no proximity sensor")
+            Log.w(TAG, "No proximity sensor — carried mode degrades to resting")
+            logEvent("Carried mode: no proximity sensor — guarding on movement instead")
             return
         }
         pocket.reset()
@@ -670,9 +681,9 @@ class GuardService : Service() {
         // range it reports is exactly what is needed to explain a phone where
         // pocket mode never fires.
         logEvent(
-            if (ok) "Pocket mode watching (${sensor.name}, max ${sensor.maximumRange}cm" +
+            if (ok) "Carried mode (${sensor.name}, max ${sensor.maximumRange}cm" +
                 (if (sensor.isWakeUpSensor) ", wake-up)" else ", non-wake-up)")
-            else "Pocket mode: proximity sensor refused to register"
+            else "Carried mode: proximity sensor refused to register"
         )
     }
 

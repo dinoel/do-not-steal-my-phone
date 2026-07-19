@@ -38,9 +38,10 @@ because the logic worth testing was deliberately kept free of Android types:
   rather than a bug: the disarm-while-locked refusal, the power-bank rule (a
   charger connected after the phone was locked never pauses the alarm), and the
   call / already-unlocked suppressions.
-- **`PocketDetector`** — pocket mode. The failure that matters here is a *false*
-  alarm (this path fires with no tilt to corroborate it), so the tests pin that a
-  brief brush, a phone lying face-up, and staying in the pocket all stay silent.
+- **`PocketDetector`** / **`GuardMode`** — Carried mode. The failure that matters
+  here is a *false* alarm (removal fires with no tilt to corroborate it), so the
+  tests pin that a brief brush, a phone lying face-up, and staying in the pocket
+  all stay silent — and that an unknown proximity state never disables motion.
 - **`MotionAnalyzer`** — baselining and tilt/jolt detection, driven by synthetic
   accelerometer samples: a resting phone and small noise stay quiet, a tilt or a
   snatch fires, a single stray sample is debounced away, and the sensitivity
@@ -93,16 +94,31 @@ A single **sensitivity** slider (0–100) tunes the tilt/jolt thresholds
 shows a **live motion meter** that fills as you move the phone and turns red past
 the current trigger threshold, so you can calibrate by feel.
 
-### Pocket mode (optional, default off)
-Tilt/jolt detection assumes the phone was put down. **Pocket mode** covers the
-other case: while watching, the proximity sensor also runs, and a sustained
-*covered → uncovered* transition means the phone was pulled out of a pocket or
-bag — a pickpocket signature that tilt alone catches late. The dwell requirement
-(`PocketDetector.NEAR_DWELL_MS`) is what keeps a hand or a sleeve brushing the
-sensor from firing it, and a phone lying face-up reads "uncovered" throughout, so
-this path stays silent there. It costs almost nothing: proximity is a low-power,
-event-driven sensor, and it goes through the same gates as motion (never while
-unlocked, in a call, or paused on an owner-connected charger).
+### Guard mode: Resting or Carried
+A phone that is **covered and moving** is either riding in your pocket (must stay
+silent) or inside a bag being carried off (must scream). No sensor separates those
+cases — the difference is intent, so it is an explicit choice rather than a
+heuristic:
+
+- **Resting** (default) — phone or bag left somewhere. Any movement is theft; this
+  is the original behaviour and the proximity sensor is not used.
+- **Carried** — phone on you. Movement is ignored **while the proximity sensor is
+  covered**, so walking around does not sound the alarm. Taking the phone out is
+  what triggers: a sustained *covered → uncovered* transition starts the normal
+  grace countdown, and since a thief cannot unlock, the countdown itself sorts out
+  "you took it out" from "a pickpocket did". The moment it reads uncovered the
+  mode behaves exactly like Resting, so a phone taken out and set on a table keeps
+  being guarded without touching a setting.
+
+The dwell requirement (`PocketDetector.NEAR_DWELL_MS`) keeps a hand or a sleeve
+brushing the sensor from triggering. If the phone has no usable proximity sensor,
+Carried mode degrades to Resting rather than to no protection — an unknown
+proximity state never suppresses motion detection. Removal goes through the same
+gates as motion (never while unlocked, in a call, or paused on a charger).
+
+**Known limit:** a bag stolen off your back while you wear it is undetectable —
+to every sensor it looks identical to you carrying it. For a bag set down beside
+you, use Resting mode, which is exactly what it is for.
 
 ### Pause while charging (default on)
 While armed and plugged in, the motion alarm is paused; **unplugging instantly

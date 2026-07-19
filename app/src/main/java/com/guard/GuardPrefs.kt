@@ -75,14 +75,19 @@ class GuardPrefs(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_WATCHING, value).apply()
 
     /**
-     * "Pocket mode": also watch the proximity sensor while watching, and treat
-     * being pulled out of a pocket/bag as motion. Default off — it is an extra
-     * trigger on top of tilt/jolt, and only makes sense when the phone is actually
-     * carried rather than left on a table.
+     * Whether the phone is being left somewhere or carried — see [GuardMode].
+     * Defaults to RESTING, the original behaviour.
      */
-    var pocketMode: Boolean
-        get() = prefs.getBoolean(KEY_POCKET_MODE, false)
-        set(value) = prefs.edit().putBoolean(KEY_POCKET_MODE, value).apply()
+    var guardMode: GuardMode
+        get() {
+            val stored = prefs.getString(KEY_GUARD_MODE, null)
+            // Migration: the first release of this feature was a "pocket mode"
+            // boolean that stacked on top of motion detection. An enabled one means
+            // the user wanted the carried case.
+            if (stored == null && prefs.getBoolean(KEY_POCKET_MODE, false)) return GuardMode.CARRIED
+            return GuardMode.fromName(stored)
+        }
+        set(value) = prefs.edit().putString(KEY_GUARD_MODE, value.name).apply()
 
     /** Strobe the camera flashlight during the alarm. Default on. */
     var flashStrobe: Boolean
@@ -171,7 +176,8 @@ class GuardPrefs(context: Context) {
         const val KEY_BOOT_SURVIVAL = "boot_survival"
         const val KEY_WATCHING = "watching"
         const val KEY_LOW_POWER = "low_power"
-        const val KEY_POCKET_MODE = "pocket_mode"
+        const val KEY_GUARD_MODE = "guard_mode"
+        const val KEY_POCKET_MODE = "pocket_mode" // legacy, read once for migration
         const val KEY_FLASH_STROBE = "flash_strobe"
         const val KEY_SCREEN_FLASH = "screen_flash"
         const val KEY_LOG = "event_log"

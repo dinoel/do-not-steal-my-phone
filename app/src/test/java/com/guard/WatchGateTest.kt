@@ -85,6 +85,35 @@ class WatchGateTest {
         assertEquals(WatchMode.WATCHING, unplugged)
     }
 
+    // ---- motionSuppressed (guard mode) ------------------------------------
+
+    @Test
+    fun `resting mode always guards on movement`() {
+        // A bag on the floor may well read "covered"; that must not disable the
+        // one thing protecting it.
+        for (covered in listOf(true, false, null)) {
+            assertFalse(
+                "covered=$covered",
+                WatchGate.motionSuppressed(GuardMode.RESTING, covered)
+            )
+        }
+    }
+
+    @Test
+    fun `carried mode ignores movement only while covered`() {
+        // In the pocket: walking must not sound the alarm.
+        assertTrue(WatchGate.motionSuppressed(GuardMode.CARRIED, covered = true))
+        // Taken out and set down: back to guarding on movement, no setting change.
+        assertFalse(WatchGate.motionSuppressed(GuardMode.CARRIED, covered = false))
+    }
+
+    @Test
+    fun `an unknown proximity state never disables motion detection`() {
+        // No proximity sensor, or nothing reported yet. Carried mode must degrade
+        // to the protection Resting mode gives, not to no protection at all.
+        assertFalse(WatchGate.motionSuppressed(GuardMode.CARRIED, covered = null))
+    }
+
     // ---- chargerMayPause --------------------------------------------------
 
     @Test

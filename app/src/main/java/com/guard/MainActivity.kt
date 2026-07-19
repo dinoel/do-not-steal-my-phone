@@ -76,6 +76,7 @@ class MainActivity : Activity() {
     private lateinit var armButton: Button
     private lateinit var stayArmedSwitch: Switch
     private lateinit var pauseChargingSwitch: Switch
+    private lateinit var pocketModeSwitch: Switch
     private lateinit var flashStrobeSwitch: Switch
     private lateinit var screenFlashSwitch: Switch
     private lateinit var bootSurvivalSwitch: Switch
@@ -258,6 +259,10 @@ class MainActivity : Activity() {
             pauseChargingSwitch = toggleRow(card, "Pause while charging",
                 "Unplugging in public instantly activates watching.", false
             ) { prefs.pauseWhileCharging = it }
+            divider(card)
+            pocketModeSwitch = toggleRow(card, "Pocket mode",
+                "Also alarm when the phone is pulled out of a pocket or bag.", false
+            ) { prefs.pocketMode = it }
         }, gap(12))
 
         // Alarm effects
@@ -736,6 +741,7 @@ class MainActivity : Activity() {
 
         stayArmedSwitch.isChecked = prefs.stayArmedAfterUnlock
         pauseChargingSwitch.isChecked = prefs.pauseWhileCharging
+        pocketModeSwitch.isChecked = prefs.pocketMode
         flashStrobeSwitch.isChecked = prefs.flashStrobe
         screenFlashSwitch.isChecked = prefs.screenFlash
         bootSurvivalSwitch.isChecked = prefs.bootSurvival

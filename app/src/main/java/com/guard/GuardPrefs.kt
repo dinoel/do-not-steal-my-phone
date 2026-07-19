@@ -74,6 +74,16 @@ class GuardPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_WATCHING, false)
         set(value) = prefs.edit().putBoolean(KEY_WATCHING, value).apply()
 
+    /**
+     * "Pocket mode": also watch the proximity sensor while watching, and treat
+     * being pulled out of a pocket/bag as motion. Default off — it is an extra
+     * trigger on top of tilt/jolt, and only makes sense when the phone is actually
+     * carried rather than left on a table.
+     */
+    var pocketMode: Boolean
+        get() = prefs.getBoolean(KEY_POCKET_MODE, false)
+        set(value) = prefs.edit().putBoolean(KEY_POCKET_MODE, value).apply()
+
     /** Strobe the camera flashlight during the alarm. Default on. */
     var flashStrobe: Boolean
         get() = prefs.getBoolean(KEY_FLASH_STROBE, true)
@@ -161,6 +171,7 @@ class GuardPrefs(context: Context) {
         const val KEY_BOOT_SURVIVAL = "boot_survival"
         const val KEY_WATCHING = "watching"
         const val KEY_LOW_POWER = "low_power"
+        const val KEY_POCKET_MODE = "pocket_mode"
         const val KEY_FLASH_STROBE = "flash_strobe"
         const val KEY_SCREEN_FLASH = "screen_flash"
         const val KEY_LOG = "event_log"

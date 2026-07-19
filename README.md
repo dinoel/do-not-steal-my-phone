@@ -9,7 +9,7 @@ someone who can actually unlock the phone silences it.
 Kotlin, plain framework Views, ordinary APK — **no root, no device owner, no MDM,
 no network/cloud, and zero third-party dependencies** (only the Android framework
 and the Kotlin stdlib; JUnit is test-only and never packaged). The release APK is
-**~95 KB**.
+**~96 KB**.
 
 ## Build
 
@@ -38,6 +38,9 @@ because the logic worth testing was deliberately kept free of Android types:
   rather than a bug: the disarm-while-locked refusal, the power-bank rule (a
   charger connected after the phone was locked never pauses the alarm), and the
   call / already-unlocked suppressions.
+- **`PocketDetector`** — pocket mode. The failure that matters here is a *false*
+  alarm (this path fires with no tilt to corroborate it), so the tests pin that a
+  brief brush, a phone lying face-up, and staying in the pocket all stay silent.
 - **`MotionAnalyzer`** — baselining and tilt/jolt detection, driven by synthetic
   accelerometer samples: a resting phone and small noise stay quiet, a tilt or a
   snatch fires, a single stray sample is debounced away, and the sensitivity
@@ -89,6 +92,17 @@ A single **sensitivity** slider (0–100) tunes the tilt/jolt thresholds
 (`GuardPrefs.sensitivityToTiltDeg` / `sensitivityToJoltMs2`). The settings screen
 shows a **live motion meter** that fills as you move the phone and turns red past
 the current trigger threshold, so you can calibrate by feel.
+
+### Pocket mode (optional, default off)
+Tilt/jolt detection assumes the phone was put down. **Pocket mode** covers the
+other case: while watching, the proximity sensor also runs, and a sustained
+*covered → uncovered* transition means the phone was pulled out of a pocket or
+bag — a pickpocket signature that tilt alone catches late. The dwell requirement
+(`PocketDetector.NEAR_DWELL_MS`) is what keeps a hand or a sleeve brushing the
+sensor from firing it, and a phone lying face-up reads "uncovered" throughout, so
+this path stays silent there. It costs almost nothing: proximity is a low-power,
+event-driven sensor, and it goes through the same gates as motion (never while
+unlocked, in a call, or paused on an owner-connected charger).
 
 ### Pause while charging (default on)
 While armed and plugged in, the motion alarm is paused; **unplugging instantly

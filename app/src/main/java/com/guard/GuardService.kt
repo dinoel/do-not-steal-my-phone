@@ -97,6 +97,7 @@ class GuardService : Service() {
 
     private var sigMotionSensor: Sensor? = null
     private var wakeUpAccel: Sensor? = null
+    private var proximitySensor: Sensor? = null
 
     private val current: GuardState
         get() = prefs.state
@@ -105,6 +106,9 @@ class GuardService : Service() {
 
     /** The tilt/jolt maths (pure, unit-tested — see [MotionAnalyzer]). */
     private val analyzer = MotionAnalyzer()
+
+    /** "Removed from a pocket" detection (pure — see [PocketDetector]). */
+    private val pocket = PocketDetector()
 
     // ---- Standby: one-shot significant motion (low-power mode) ------------
 
@@ -155,6 +159,24 @@ class GuardService : Service() {
                     Log.i(TAG, "Moved while charging-paused — re-baselining")
                     analyzer.rebaseline(now)
                 }
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
+    // ---- Standby: proximity ("pocket mode", optional) ---------------------
+
+    private val proximityListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            val sensor = event.sensor ?: return
+            val near = PocketDetector.isNear(event.values[0], sensor.maximumRange)
+            val removed = pocket.onSample(near, SystemClock.elapsedRealtime())
+            // Only WATCHING may alarm; while charging-paused the readings just keep
+            // the detector's near/far state current, exactly like the baseline.
+            if (removed && detectionActive) {
+                Log.i(TAG, "Removed from pocket")
+                onMotionDetected("removed from pocket")
             }
         }
 
@@ -233,6 +255,10 @@ class GuardService : Service() {
         flashCameraId = findFlashCameraId()
 
         sigMotionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
+        // Prefer the wake-up proximity sensor so pocket mode keeps reporting with
+        // the screen off even in battery-saver mode (which holds no wake lock).
+        proximitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY, true)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
         // A wake-up accelerometer keeps delivering with the screen off; fall back
         // to the normal one (still fine because we hold a wake lock while armed).
         wakeUpAccel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true)
@@ -607,15 +633,38 @@ class GuardService : Service() {
                 sensorsRunning = true
             } ?: Log.w(TAG, "No accelerometer available")
         }
+
+        registerPocketMode()
+    }
+
+    /**
+     * Pocket mode rides alongside either detection path: the proximity sensor is
+     * low-power and event-driven (it reports only on a near/far change), so the
+     * cost is negligible even in battery-saver mode.
+     */
+    private fun registerPocketMode() {
+        if (!prefs.pocketMode) return
+        val sensor = proximitySensor ?: run {
+            Log.w(TAG, "No proximity sensor — pocket mode unavailable")
+            return
+        }
+        pocket.reset()
+        sensorManager.registerListener(proximityListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        Log.i(TAG, "Pocket mode: proximity sensor registered")
     }
 
     private fun unregisterStandby() {
         sigMotionSensor?.let { sensorManager.cancelTriggerSensor(triggerListener, it) }
         sensorManager.unregisterListener(standbyAccelListener)
+        sensorManager.unregisterListener(proximityListener)
+        pocket.reset()
         sensorsRunning = false
     }
 
-    private fun resetDetection() = analyzer.reset(SystemClock.elapsedRealtime())
+    private fun resetDetection() {
+        analyzer.reset(SystemClock.elapsedRealtime())
+        pocket.reset()
+    }
 
     // ---- Wake lock --------------------------------------------------------
 

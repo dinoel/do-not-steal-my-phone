@@ -31,9 +31,6 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.graphics.drawable.Icon
 import android.util.Log
-import kotlin.math.abs
-import kotlin.math.acos
-import kotlin.math.sqrt
 
 /**
  * The single foreground service that owns the whole guard: the state machine,
@@ -74,20 +71,6 @@ class GuardService : Service() {
     private var flashCameraId: String? = null
     private var torchOn = false
 
-    /** The three sub-modes of ARMED — see [updateWatchState]. */
-    private enum class WatchMode {
-        /** Waiting for the phone to be locked; sensors off. */
-        IDLE,
-
-        /** Paused on an owner-connected charger. In the reliable (accelerometer)
-         *  mode the sensor keeps running so the resting baseline stays warm, but
-         *  threshold hits only re-baseline — they never alarm. */
-        PAUSED_CHARGING,
-
-        /** Actively watching; motion leads to TRIGGERED/ALARM. */
-        WATCHING,
-    }
-
     private var watchMode = WatchMode.IDLE
 
     /**
@@ -120,21 +103,8 @@ class GuardService : Service() {
 
     // ---- Accelerometer standby detection state ----------------------------
 
-    /** Low-pass estimate of the gravity vector (device orientation). */
-    private var gX = 0f
-    private var gY = 0f
-    private var gZ = 0f
-    private var gravityInit = false
-
-    /** Baseline gravity vector captured once the phone is resting/still. */
-    private var baseX = 0f
-    private var baseY = 0f
-    private var baseZ = 0f
-    private var baselineFrozen = false
-
-    private var armStartMs = 0L
-    private var stillSinceMs = 0L
-    private var detectHits = 0
+    /** The tilt/jolt maths (pure, unit-tested — see [MotionAnalyzer]). */
+    private val analyzer = MotionAnalyzer()
 
     // ---- Standby: one-shot significant motion (low-power mode) ------------
 
@@ -149,73 +119,42 @@ class GuardService : Service() {
 
     private val standbyAccelListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            val x = event.values[0]
-            val y = event.values[1]
-            val z = event.values[2]
             val now = SystemClock.elapsedRealtime()
-
-            // Low-pass filter to estimate the gravity direction.
-            if (!gravityInit) {
-                gX = x; gY = y; gZ = z
-                gravityInit = true
-            } else {
-                gX = GRAVITY_LP * gX + (1 - GRAVITY_LP) * x
-                gY = GRAVITY_LP * gY + (1 - GRAVITY_LP) * y
-                gZ = GRAVITY_LP * gZ + (1 - GRAVITY_LP) * z
-            }
-
-            val jolt = abs(sqrt(x * x + y * y + z * z) - SensorManager.GRAVITY_EARTH)
-
-            // Phase 1: wait until the phone is set down and still, then lock in the
-            // resting orientation as the baseline. This makes "arm, then place the
-            // phone" work without instantly false-triggering on the placing motion.
-            if (!baselineFrozen) {
-                baseX = gX; baseY = gY; baseZ = gZ
-                if (jolt < STILL_JOLT_MS2) {
-                    if (stillSinceMs == 0L) stillSinceMs = now
-                    else if (now - stillSinceMs >= STILL_MS) {
-                        baselineFrozen = true
-                        Log.i(TAG, "Baseline orientation locked; now watching for pickup")
-                        logEvent(
-                            if (detectionActive) "Phone placed & still — watching for pickup"
-                            else "Resting position locked (charging — alarm paused)"
-                        )
-                    }
-                } else {
-                    stillSinceMs = 0L
-                }
-                // Safety: never wait forever to arm (e.g. a vibrating surface).
-                if (now - armStartMs >= BASELINE_MAX_MS) baselineFrozen = true
-                return
-            }
-
-            // Phase 2: watch for a tilt off the resting orientation or a jolt.
-            val tiltDeg = angleBetweenDeg(gX, gY, gZ, baseX, baseY, baseZ)
             val sens = prefs.sensitivity
-            val tiltThresh = GuardPrefs.sensitivityToTiltDeg(sens)
-            val joltThresh = GuardPrefs.sensitivityToJoltMs2(sens)
+            val outcome = analyzer.onSample(
+                event.values[0], event.values[1], event.values[2], now,
+                GuardPrefs.sensitivityToTiltDeg(sens),
+                GuardPrefs.sensitivityToJoltMs2(sens),
+            )
 
-            if (tiltDeg > tiltThresh || jolt > joltThresh) {
-                detectHits++
-                if (detectHits >= DETECT_HITS) {
-                    if (detectionActive) {
-                        val reason = "tilt ${"%.0f".format(tiltDeg)}° / jolt ${"%.1f".format(jolt)}"
-                        Log.i(TAG, "Pickup detected ($reason)")
-                        onMotionDetected(reason)
-                    } else {
-                        // Charging-paused: the phone was legitimately moved (e.g. the
-                        // owner repositioned it on the charger). Adopt the new resting
-                        // position so unplug-detection stays instant AND accurate —
-                        // never alarm from here.
-                        Log.i(TAG, "Moved while charging-paused — re-baselining")
-                        baselineFrozen = false
-                        stillSinceMs = 0L
-                        detectHits = 0
-                        armStartMs = now
-                    }
+            when (outcome) {
+                MotionAnalyzer.Outcome.NONE,
+                MotionAnalyzer.Outcome.BASELINE_TIMEOUT -> {
+                    // Timeout means we gave up waiting for stillness (e.g. a
+                    // vibrating surface) and now watch anyway — nothing to report.
                 }
-            } else {
-                detectHits = 0
+
+                MotionAnalyzer.Outcome.BASELINE_LOCKED -> {
+                    Log.i(TAG, "Baseline orientation locked; now watching for pickup")
+                    logEvent(
+                        if (detectionActive) "Phone placed & still — watching for pickup"
+                        else "Resting position locked (charging — alarm paused)"
+                    )
+                }
+
+                MotionAnalyzer.Outcome.THRESHOLD_HIT -> if (detectionActive) {
+                    val reason = "tilt ${"%.0f".format(analyzer.tiltDeg)}° / " +
+                        "jolt ${"%.1f".format(analyzer.jolt)}"
+                    Log.i(TAG, "Pickup detected ($reason)")
+                    onMotionDetected(reason)
+                } else {
+                    // Charging-paused: the phone was legitimately moved (e.g. the
+                    // owner repositioned it on the charger). Adopt the new resting
+                    // position so unplug-detection stays instant AND accurate —
+                    // never alarm from here.
+                    Log.i(TAG, "Moved while charging-paused — re-baselining")
+                    analyzer.rebaseline(now)
+                }
             }
         }
 
@@ -241,7 +180,7 @@ class GuardService : Service() {
                 }
                 Intent.ACTION_POWER_CONNECTED -> {
                     if (current == GuardState.ARMED) {
-                        if (!hasBeenLocked) {
+                        if (WatchGate.chargerMayPause(hasBeenLocked)) {
                             // Owner is still using the phone — this charger may pause.
                             chargerPauseAllowed = true
                             logEvent("Charger connected")
@@ -402,25 +341,22 @@ class GuardService : Service() {
         return plugged != 0
     }
 
-    /** True if the "pause while charging" pause currently applies (setting on,
-     *  an owner-connected charger — see [chargerPauseAllowed] — still plugged). */
-    private fun isChargePaused(): Boolean =
-        prefs.pauseWhileCharging && chargerPauseAllowed && isPluggedIn()
-
     /**
      * Central gate: we watch for motion only once the phone has been locked AND
      * it is not paused on an owner-connected charger. Unplugging the charger
      * activates watching immediately (with a warm baseline, so detection is live
      * from the very first sample). A charger connected after the phone was locked
-     * (a thief's power bank) never pauses — see [chargerPauseAllowed].
+     * (a thief's power bank) never pauses — see [chargerPauseAllowed]. The rules
+     * themselves live in [WatchGate], where they are unit-tested.
      */
     private fun updateWatchState() {
         if (current != GuardState.ARMED) return
-        val target = when {
-            !hasBeenLocked -> WatchMode.IDLE
-            isChargePaused() -> WatchMode.PAUSED_CHARGING
-            else -> WatchMode.WATCHING
-        }
+        val target = WatchGate.watchMode(
+            hasBeenLocked = hasBeenLocked,
+            pauseWhileChargingSetting = prefs.pauseWhileCharging,
+            chargerPauseAllowed = chargerPauseAllowed,
+            pluggedIn = isPluggedIn(),
+        )
         if (target == watchMode) {
             if (target == WatchMode.WATCHING) registerStandby() // re-assert (watchdog/restart)
             updateForegroundNotification() // text may have changed
@@ -491,7 +427,7 @@ class GuardService : Service() {
      */
     private fun requestDisarm() {
         val km = getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
-        if (km.isKeyguardLocked && km.isDeviceSecure) {
+        if (!WatchGate.disarmAllowed(km.isKeyguardLocked, km.isDeviceSecure)) {
             Log.w(TAG, "Disarm refused — phone is locked")
             logEvent("Disarm attempt while locked — ignored (unlock first)")
             return
@@ -530,7 +466,7 @@ class GuardService : Service() {
      */
     private fun isUnlockedByOwner(): Boolean {
         val km = getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
-        return km.isDeviceSecure && !km.isKeyguardLocked
+        return WatchGate.unlockedByOwner(km.isKeyguardLocked, km.isDeviceSecure)
     }
 
     /**
@@ -538,12 +474,7 @@ class GuardService : Service() {
      * from the global audio mode, which needs NO permission — so picking the phone
      * up to answer a call never sounds the alarm.
      */
-    private fun isPhoneBusy(): Boolean {
-        val mode = audioManager.mode
-        return mode == AudioManager.MODE_RINGTONE ||
-            mode == AudioManager.MODE_IN_CALL ||
-            mode == AudioManager.MODE_IN_COMMUNICATION
-    }
+    private fun isPhoneBusy(): Boolean = WatchGate.phoneBusy(audioManager.mode)
 
     /** ARMED -> TRIGGERED. Called from either detection path. */
     private fun onMotionDetected(reason: String = "motion") {
@@ -684,13 +615,7 @@ class GuardService : Service() {
         sensorsRunning = false
     }
 
-    private fun resetDetection() {
-        gravityInit = false
-        baselineFrozen = false
-        stillSinceMs = 0L
-        detectHits = 0
-        armStartMs = SystemClock.elapsedRealtime()
-    }
+    private fun resetDetection() = analyzer.reset(SystemClock.elapsedRealtime())
 
     // ---- Wake lock --------------------------------------------------------
 
@@ -966,19 +891,6 @@ class GuardService : Service() {
         notificationManager.createNotificationChannel(alarm)
     }
 
-    /** Angle in degrees between two 3-vectors. */
-    private fun angleBetweenDeg(
-        ax: Float, ay: Float, az: Float,
-        bx: Float, by: Float, bz: Float,
-    ): Float {
-        val dot = ax * bx + ay * by + az * bz
-        val magA = sqrt(ax * ax + ay * ay + az * az)
-        val magB = sqrt(bx * bx + by * by + bz * bz)
-        if (magA < 1e-3f || magB < 1e-3f) return 0f
-        val cos = (dot / (magA * magB)).coerceIn(-1f, 1f)
-        return Math.toDegrees(acos(cos).toDouble()).toFloat()
-    }
-
     companion object {
         private const val TAG = "GuardService"
 
@@ -995,12 +907,8 @@ class GuardService : Service() {
         private const val WL_TAG = "Guard:AlarmWakeLock"
         private const val WAKELOCK_TIMEOUT_MS = 60 * 60 * 1000L // 60 min safety net
 
-        // Detection tuning (see GuardPrefs for the sensitivity-mapped thresholds).
-        private const val GRAVITY_LP = 0.85f       // gravity low-pass smoothing
-        private const val STILL_JOLT_MS2 = 0.7f    // "still enough" to lock baseline
-        private const val STILL_MS = 700L          // must be still this long first
-        private const val BASELINE_MAX_MS = 10_000L // give up waiting for stillness
-        private const val DETECT_HITS = 2          // consecutive samples to debounce noise
+        // Detection tuning lives in MotionAnalyzer; the sensitivity-mapped
+        // thresholds it is fed live in GuardPrefs.
 
         private const val TORCH_INTERVAL_MS = 150L // flashlight strobe half-period
         private const val TEST_SIREN_MS = 11000L // one full cycle of the 5 alarm sounds

@@ -25,8 +25,10 @@ android {
         // adaptive icons are all available; the target device (S23) is API 34.
         minSdk = 28
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Shown in-app in the footer (MainActivity.versionLine), read back from the
+        // installed package — so what the phone reports is what is actually installed.
+        versionCode = 2
+        versionName = "1.1"
     }
 
     signingConfigs {

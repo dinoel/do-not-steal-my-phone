@@ -379,11 +379,39 @@ class MainActivity : Activity() {
         // Event log
         column.addView(buildLogCard(), gap(12))
 
+        // Version footer, so it is obvious which build is on the phone.
+        column.addView(TextView(this).apply {
+            text = versionLine()
+            textSize = 11.5f
+            gravity = Gravity.CENTER
+            setTextColor(pal.text3)
+            setPadding(0, dp(16), 0, dp(4))
+        }, gap(0))
+
         return ScrollView(this).apply {
             setBackgroundColor(pal.bg)
             isFillViewport = true
             addView(column)
         }
+    }
+
+    /**
+     * "Guard v1.1 (2) · debug" — read from the installed package rather than
+     * BuildConfig, which is disabled in this project (one less generated class).
+     * The build type is worth showing: debug and release are signed with different
+     * keys, so knowing which one is installed explains an "install failed" prompt.
+     */
+    private fun versionLine(): String {
+        val info = runCatching { packageManager.getPackageInfo(packageName, 0) }.getOrNull()
+        val name = info?.versionName ?: "?"
+        val code = info?.let {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode else {
+                @Suppress("DEPRECATION") it.versionCode.toLong()
+            }
+        } ?: 0L
+        val debuggable =
+            applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+        return "Guard v$name ($code)" + if (debuggable) " · debug" else ""
     }
 
     private fun buildHeader(): View {
